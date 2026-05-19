@@ -1,0 +1,70 @@
+# yaml-language-server: $schema=https://niro.apxlabs.ai/schema/v1/scope.json
+#
+# What Niro is authorized to test. Edit this file to authorize targets
+# before your first pentest.
+#
+# ---------------------------------------------------------------------
+# IMPORTANT: one niro config per environment
+# ---------------------------------------------------------------------
+# Keep environments in SEPARATE niro configs. Mixing localhost, staging,
+# and production URLs in one allowlist is the #1 way to accidentally
+# pentest production. The LLM picks from what it sees — if prod is in
+# this file, prod is on the menu, even when the dev said "test on
+# staging." Each niro config has its own allowlist, credentials, and
+# brain, so a confused agent cannot cross between environments. For
+# multiple environments, scaffold a separate niro/ directory per env
+# (e.g., niro/, niro-staging/, niro-prod/) and pass the appropriate
+# absolute path as `niro_config_absolute_path` from your coding agent.
+#
+# ---------------------------------------------------------------------
+# How entries work
+# ---------------------------------------------------------------------
+# Each entry: required `target` (host:portspec); optional `excluded: true`.
+# Excluded entries are evaluated first — deny wins over allow. Anything
+# not listed is denied at the kernel by netfilter.
+#
+# ---------------------------------------------------------------------
+# Reachability
+# ---------------------------------------------------------------------
+# Every target must be reachable from inside the niro container — niro
+# does not bridge networks for you. `localhost` and `127.0.0.1` here
+# mean the container's loopback, not your host's, so an app on your
+# host's loopback is not reachable that way. On Docker Desktop
+# (macOS/Windows), use `host.docker.internal:<port>` instead. Verify
+# any target before listing it:
+#
+#   docker run --rm curlimages/curl -v <host:port>
+#
+# If that connects, the niro agent will too. niro's pre-flight probe
+# runs the same TCP dial and refuses to start if any target fails.
+#
+# ---------------------------------------------------------------------
+# Target syntax
+# ---------------------------------------------------------------------
+#   api.staging.acme.dev:443           Exact FQDN, single port.
+#   api.staging.acme.dev:80,443        Multi-port list.
+#   api.staging.acme.dev:8000-8999     Port range.
+#   *.staging.acme.dev:443             Subdomain wildcard (one DNS level).
+#   10.0.42.0/24:443                   IPv4 CIDR.
+#   [2001:db8::/32]:443                IPv6 CIDR (brackets required with port).
+#
+# ---------------------------------------------------------------------
+# Worked example — uncomment + edit to authorize your targets
+# ---------------------------------------------------------------------
+# targets:
+#   # Allow every staging subdomain over HTTPS.
+#   - target: "*.staging.acme.dev:443"
+#
+#   # Allow a specific staging API on multiple ports.
+#   - target: "api.staging.acme.dev:80,443"
+#
+#   # Carve out a staging host that's actually production-billing —
+#   # excluded entries are evaluated first, deny wins.
+#   - target: "metrics.staging.acme.dev:443"
+#     excluded: true
+#
+#   # Allow an internal CIDR.
+#   - target: "10.0.42.0/24:443"
+
+targets:
+  - target: "host.docker.internal:8000"

@@ -8,4 +8,4 @@ fi
 . .venv/bin/activate
 pip install -q -r requirements.txt
 python seed.py
-exec uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
+exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
