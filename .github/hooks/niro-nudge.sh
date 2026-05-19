@@ -81,7 +81,7 @@ prs=( $(printf '%s\n' "${prs[@]}" | sort -un) )
 rm -f "${markers[@]}"
 
 if [ "${#prs[@]}" -eq 1 ]; then
-  reason="A push just landed on PR #${prs[0]}. To update the security review, call mcp__niro__start_pentest with mode=pr and pr_number=${prs[0]}."
+  reason="A push just landed on PR #${prs[0]}. To update the security review, call niro-start_pentest with mode=pr and pr_number=${prs[0]}."
 else
   list=""
   for p in "${prs[@]}"; do
@@ -91,7 +91,7 @@ else
       list="${list}, #${p}"
     fi
   done
-  reason="Pushes landed on PRs ${list}. To update the security reviews, call mcp__niro__start_pentest once per PR (mode=pr, pr_number=N)."
+  reason="Pushes landed on PRs ${list}. To update the security reviews, call niro-start_pentest once per PR (mode=pr, pr_number=N)."
 fi
 
 # Emit decision:block with the reason. jq handles JSON escaping
