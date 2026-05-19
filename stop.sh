@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Stop whatever is listening on port 8000 (the helpdesk server started
-# by run.sh). Safe to run when nothing is listening — exits silently.
+# by start.sh). Safe to run when nothing is listening — exits silently.
 set -euo pipefail
 
 PORT="${PORT:-8000}"

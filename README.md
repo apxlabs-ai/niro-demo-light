@@ -10,10 +10,12 @@ closes the resulting open PRs.
 ## Run locally
 
 ```
-./run.sh
+./start.sh
 ```
 
-Server starts on `http://127.0.0.1:8000`. Interactive docs at `/docs`.
+Server starts on `http://127.0.0.1:8000` and prints `→ helpdesk ready on
+http://127.0.0.1:8000` once `/health` responds. Interactive docs at `/docs`.
+Stop with `./stop.sh`.
 
 ### Seeded users
 
