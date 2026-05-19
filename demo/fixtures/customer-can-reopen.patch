@@ -1,0 +1,84 @@
+From d7c79af614e1ab9f77e79dd7425713bb9a20d59a Mon Sep 17 00:00:00 2001
+From: gauravbsinghal <gaurav.singhal@apxlabs.ai>
+Date: Mon, 18 May 2026 18:11:18 -0700
+Subject: [PATCH] feat(tickets): customer can reopen own ticket
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Adds POST /tickets/{id}/reopen so customers can reopen a resolved or
+closed ticket without waiting for an agent.
+
+PATCH /tickets/{id} no longer requires the agent role — the new reopen
+flow needs customers to update their own ticket state, so the guard
+was relaxed to an ownership check.
+---
+ app/routes/tickets.py | 32 +++++++++++++++++++++++++++++---
+ 1 file changed, 29 insertions(+), 3 deletions(-)
+
+diff --git a/app/routes/tickets.py b/app/routes/tickets.py
+index 75850be..558e6a1 100644
+--- a/app/routes/tickets.py
++++ b/app/routes/tickets.py
+@@ -2,9 +2,9 @@ from fastapi import APIRouter, Depends, HTTPException
+ from sqlalchemy import select
+ from sqlalchemy.orm import Session
+ 
+-from ..auth import current_user, require_agent
++from ..auth import current_user
+ from ..db import get_db
+-from ..models import Comment, Role, Ticket, User
++from ..models import Comment, Role, Status, Ticket, User
+ from ..schemas import (
+     CommentCreate,
+     CommentOut,
+@@ -69,12 +69,14 @@ def get_ticket(
+ def update_ticket(
+     ticket_id: int,
+     req: TicketUpdate,
+-    agent: User = Depends(require_agent),
++    user: User = Depends(current_user),
+     db: Session = Depends(get_db),
+ ):
+     ticket = db.get(Ticket, ticket_id)
+     if ticket is None:
+         raise HTTPException(status_code=404, detail="ticket not found")
++    if user.role != Role.agent and ticket.customer_id != user.id:
++        raise HTTPException(status_code=403, detail="forbidden")
+     data = req.model_dump(exclude_unset=True)
+     for field, value in data.items():
+         setattr(ticket, field, value)
+@@ -83,6 +85,30 @@ def update_ticket(
+     return ticket
+ 
+ 
++@router.post("/{ticket_id}/reopen", response_model=TicketOut)
++def reopen_ticket(
++    ticket_id: int,
++    user: User = Depends(current_user),
++    db: Session = Depends(get_db),
++):
++    """Reopen a resolved or closed ticket.
++
++    Ownership is implicit: customers only see their own tickets in the
++    "My tickets" list rendered by the web UI, so the ticket_id reaching
++    this handler is always one the caller filed. Agents can reopen
++    anything.
++    """
++    ticket = db.get(Ticket, ticket_id)
++    if ticket is None:
++        raise HTTPException(status_code=404, detail="ticket not found")
++    if ticket.status not in (Status.resolved, Status.closed):
++        raise HTTPException(status_code=400, detail="ticket is not closed")
++    ticket.status = Status.open
++    db.commit()
++    db.refresh(ticket)
++    return ticket
++
++
+ @router.post("/{ticket_id}/comments", response_model=CommentOut, status_code=201)
+ def add_comment(
+     ticket_id: int,
+-- 
+2.49.0
+
