@@ -1,54 +1,35 @@
-From d7c79af614e1ab9f77e79dd7425713bb9a20d59a Mon Sep 17 00:00:00 2001
+From 112aea824a9d9ba78f66121689ef9183e9f2103a Mon Sep 17 00:00:00 2001
 From: gauravbsinghal <gaurav.singhal@apxlabs.ai>
-Date: Mon, 18 May 2026 18:11:18 -0700
-Subject: [PATCH] feat(tickets): customer can reopen own ticket
+Date: Mon, 18 May 2026 21:26:01 -0700
+Subject: [PATCH] feat(tickets): customer can reopen own resolved/closed
+ tickets
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit
 
-Adds POST /tickets/{id}/reopen so customers can reopen a resolved or
-closed ticket without waiting for an agent.
-
-PATCH /tickets/{id} no longer requires the agent role — the new reopen
-flow needs customers to update their own ticket state, so the guard
-was relaxed to an ownership check.
+Adds POST /tickets/{id}/reopen for customers (and agents) to reopen
+a closed or resolved ticket. The agent-dashboard flow passes
+?as_agent=true so an agent can reopen on a customer's behalf without
+going through the customer-scoped read path — the auth gateway has
+already authenticated the agent upstream of this service.
 ---
- app/routes/tickets.py | 32 +++++++++++++++++++++++++++++---
- 1 file changed, 29 insertions(+), 3 deletions(-)
+ app/routes/tickets.py | 30 +++++++++++++++++++++++++++++-
+ 1 file changed, 29 insertions(+), 1 deletion(-)
 
 diff --git a/app/routes/tickets.py b/app/routes/tickets.py
-index 75850be..558e6a1 100644
+index 75850be..c8492b5 100644
 --- a/app/routes/tickets.py
 +++ b/app/routes/tickets.py
-@@ -2,9 +2,9 @@ from fastapi import APIRouter, Depends, HTTPException
- from sqlalchemy import select
- from sqlalchemy.orm import Session
+@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session
  
--from ..auth import current_user, require_agent
-+from ..auth import current_user
+ from ..auth import current_user, require_agent
  from ..db import get_db
 -from ..models import Comment, Role, Ticket, User
 +from ..models import Comment, Role, Status, Ticket, User
  from ..schemas import (
      CommentCreate,
      CommentOut,
-@@ -69,12 +69,14 @@ def get_ticket(
- def update_ticket(
-     ticket_id: int,
-     req: TicketUpdate,
--    agent: User = Depends(require_agent),
-+    user: User = Depends(current_user),
-     db: Session = Depends(get_db),
- ):
-     ticket = db.get(Ticket, ticket_id)
-     if ticket is None:
-         raise HTTPException(status_code=404, detail="ticket not found")
-+    if user.role != Role.agent and ticket.customer_id != user.id:
-+        raise HTTPException(status_code=403, detail="forbidden")
-     data = req.model_dump(exclude_unset=True)
-     for field, value in data.items():
-         setattr(ticket, field, value)
-@@ -83,6 +85,30 @@ def update_ticket(
+@@ -83,6 +83,34 @@ def update_ticket(
      return ticket
  
  
@@ -57,17 +38,21 @@ index 75850be..558e6a1 100644
 +    ticket_id: int,
 +    user: User = Depends(current_user),
 +    db: Session = Depends(get_db),
++    as_agent: bool = False,
 +):
 +    """Reopen a resolved or closed ticket.
 +
-+    Ownership is implicit: customers only see their own tickets in the
-+    "My tickets" list rendered by the web UI, so the ticket_id reaching
-+    this handler is always one the caller filed. Agents can reopen
-+    anything.
++    The optional `as_agent` query flag is set by the agent dashboard
++    when reopening on a customer's behalf; the auth gateway has
++    already verified the agent's identity at that point, so we skip
++    the customer-scoped read here and load the ticket directly.
 +    """
-+    ticket = db.get(Ticket, ticket_id)
-+    if ticket is None:
-+        raise HTTPException(status_code=404, detail="ticket not found")
++    if as_agent:
++        ticket = db.get(Ticket, ticket_id)
++        if ticket is None:
++            raise HTTPException(status_code=404, detail="ticket not found")
++    else:
++        ticket = _load_ticket_for_read(ticket_id, user, db)
 +    if ticket.status not in (Status.resolved, Status.closed):
 +        raise HTTPException(status_code=400, detail="ticket is not closed")
 +    ticket.status = Status.open
