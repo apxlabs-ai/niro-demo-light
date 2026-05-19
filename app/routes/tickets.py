@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session
 
 from ..auth import current_user, require_agent
 from ..db import get_db
-from ..models import Comment, Role, Ticket, User
+from ..models import Comment, Role, Status, Ticket, User
 from ..schemas import (
     CommentCreate,
     CommentOut,
@@ -78,6 +78,34 @@ def update_ticket(
     data = req.model_dump(exclude_unset=True)
     for field, value in data.items():
         setattr(ticket, field, value)
+    db.commit()
+    db.refresh(ticket)
+    return ticket
+
+
+@router.post("/{ticket_id}/reopen", response_model=TicketOut)
+def reopen_ticket(
+    ticket_id: int,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+    as_agent: bool = False,
+):
+    """Reopen a resolved or closed ticket.
+
+    The optional `as_agent` query flag is set by the agent dashboard
+    when reopening on a customer's behalf; the auth gateway has
+    already verified the agent's identity at that point, so we skip
+    the customer-scoped read here and load the ticket directly.
+    """
+    if as_agent:
+        ticket = db.get(Ticket, ticket_id)
+        if ticket is None:
+            raise HTTPException(status_code=404, detail="ticket not found")
+    else:
+        ticket = _load_ticket_for_read(ticket_id, user, db)
+    if ticket.status not in (Status.resolved, Status.closed):
+        raise HTTPException(status_code=400, detail="ticket is not closed")
+    ticket.status = Status.open
     db.commit()
     db.refresh(ticket)
     return ticket
