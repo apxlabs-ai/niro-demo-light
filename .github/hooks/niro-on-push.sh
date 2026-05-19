@@ -81,6 +81,58 @@ esac
 # fires on every `bash` tool call and this script does ALL the
 # filtering itself.
 input="$(cat)"
+
+# start_pentest short-circuit:
+#
+# If this postToolUse is for the niro start_pentest tool, the agent
+# has already taken action on this PR — kicking off (or trying to
+# kick off) a pentest. Re-prompting via niro-nudge.sh at agentStop
+# adds zero new information: the agent already saw start_pentest's
+# success/failure result and can decide what to do next on its own.
+#
+# So we clear the marker for that <sessionId>.<pr_number>. At
+# agentStop, the nudge script globs nothing for this PR and stays
+# silent. The other marker semantics (write-on-push, delete-on-nudge)
+# stay unchanged — this is purely an additional "agent already
+# engaged, suppress one redundant nudge" path.
+#
+# We match on suffix "*start_pentest" rather than the exact
+# namespaced name "niro-start_pentest", so the same logic survives
+# any future SDK wire-format change (bare vs prefixed).
+# Empirically (Copilot CLI 1.0.49) toolName arrives as
+# "niro-start_pentest"; the suffix match catches both that and any
+# future bare form.
+#
+# Runs unconditionally (not gated on agent): claude never writes
+# markers, so rm -f silently no-ops there. Cheaper than another
+# conditional branch and survives a future world where claude grows
+# the same marker pattern.
+if command -v jq >/dev/null 2>&1; then
+  toolName="$(echo "$input" | jq -r '.toolName // .tool_name // ""' 2>/dev/null || echo "")"
+  case "$toolName" in
+    *start_pentest)
+      # toolArgs can arrive as an object OR a stringified JSON blob
+      # (same dual-shape quirk the bash-command branch below handles
+      # via fromjson?). Mirror that pattern here so both shapes work.
+      # tool_input is checked too so this stays correct if a future
+      # claude install adopts the marker pattern (its envelope uses
+      # snake_case tool_input + tool_name).
+      sp_session="$(echo "$input" | jq -r '.sessionId // .session_id // ""' 2>/dev/null || echo "")"
+      sp_pr="$(echo "$input" | jq -r '
+        .toolArgs.pr_number
+        // (.toolArgs | (fromjson? // {}) | .pr_number)
+        // .tool_input.pr_number
+        // ""
+      ' 2>/dev/null || echo "")"
+      if [ -n "$sp_session" ] && [ "$sp_session" != "null" ] \
+         && [ -n "$sp_pr" ] && [ "$sp_pr" != "null" ]; then
+        rm -f "${TMPDIR:-/tmp/}niro-pending-pentest.${sp_session}.${sp_pr}"
+      fi
+      exit 0
+      ;;
+  esac
+fi
+
 if command -v jq >/dev/null 2>&1; then
   # Try Claude's shape, fall back to Copilot's. The `// ""` chain
   # also handles Copilot's stringified toolArgs case via the
