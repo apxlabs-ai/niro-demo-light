@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "hooks": {
+    "postToolUse": [
+      {
+        "type": "command",
+        "bash": ".github/hooks/niro-on-push.sh --agent copilot",
+        "timeoutSec": 30
+      }
+    ],
+    "agentStop": [
+      {
+        "type": "command",
+        "bash": ".github/hooks/niro-nudge.sh",
+        "timeoutSec": 10
+      }
+    ]
+  }
+}

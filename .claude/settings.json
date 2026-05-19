@@ -1,0 +1,21 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "if": "Bash(git push *)",
+            "command": ".claude/hooks/niro-on-push.sh --agent claude"
+          },
+          {
+            "type": "command",
+            "if": "Bash(gh pr create *)",
+            "command": ".claude/hooks/niro-on-push.sh --agent claude"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -5,3 +5,4 @@ __pycache__/
 *.db-journal
 .env
 .DS_Store
+niro/credentials.yaml
