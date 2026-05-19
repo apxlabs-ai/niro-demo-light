@@ -156,16 +156,17 @@ def _ticket_to_dict(t: Ticket) -> dict[str, Any]:
 # --- Result cache + executor -----------------------------------------
 
 
-def _cache_key(filter_json: str) -> str:
-    """Stable cache key derived from the filter JSON.
+def _cache_key(filter_json: str, scope_id: int | None) -> str:
+    """Stable cache key derived from the filter JSON AND the caller's scope.
 
-    The filter JSON is already canonicalized by `serialize_filter`
-    (sorted keys, normalized values), so two logically-identical
-    filters produce the same key — and therefore hit the same cache
-    entry. That's the win: a popular saved search ({status: open}) only
-    pays the SQL cost once per TTL window across the whole process.
+    Scope must be included so that two customers with the same filter
+    (e.g. `{}`) do not share a cache entry — that would allow Customer
+    A's scoped results to be served to Customer B (BOLA via cache
+    poisoning). `scope_id=None` is used for global/admin queries that
+    intentionally bypass the per-tenant filter.
     """
-    return hashlib.sha256(filter_json.encode()).hexdigest()
+    scope_part = str(scope_id) if scope_id is not None else "global"
+    return hashlib.sha256(f"{scope_part}:{filter_json}".encode()).hexdigest()
 
 
 def execute_search(
@@ -189,8 +190,12 @@ def execute_search(
     filter_dict = normalize_filter(json.loads(filter_json) if filter_json else {})
     canon_json = json.dumps(filter_dict, sort_keys=True, default=str)
 
+    # Scope id used for cache keying: only customer-role users get a
+    # per-user bucket; agents and admin (scope=None) share a global bucket.
+    scope_id = scope.id if (scope is not None and scope.role == Role.customer) else None
+
     if use_cache:
-        key = _cache_key(canon_json)
+        key = _cache_key(canon_json, scope_id)
         now = time.time()
         hit = _cache.get(key)
         if hit is not None:
@@ -201,7 +206,7 @@ def execute_search(
     rows = [_ticket_to_dict(t) for t in db.scalars(_build_query(filter_dict, scope)).all()]
 
     if use_cache:
-        _cache[_cache_key(canon_json)] = (time.time(), rows)
+        _cache[_cache_key(canon_json, scope_id)] = (time.time(), rows)
     return rows
 
 

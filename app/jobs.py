@@ -114,7 +114,12 @@ def run_scheduled_report(report_id: int, db: Session) -> ReportRun:
         # backend path. Bypass the in-process cache: scheduled reports
         # need a fresh result set every fire to be useful as an audit
         # signal.
-        results = execute_search(saved.filter_json, db, use_cache=False)
+        # Pass the saved-search owner as scope so the background worker
+        # enforces the same per-tenant boundary as the interactive API
+        # path. Without scope=owner, execute_search returns every ticket
+        # across all tenants and those cross-tenant IDs are emailed and
+        # stored in ReportRun.result_ticket_ids_json (BOLA).
+        results = execute_search(saved.filter_json, db, scope=owner, use_cache=False)
     except FilterError as e:
         run = ReportRun(
             scheduled_report_id=report.id,
