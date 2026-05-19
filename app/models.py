@@ -133,7 +133,15 @@ class ScheduledReport(Base):
 
     saved_search = relationship("SavedSearch", back_populates="schedules")
     runs = relationship(
-        "ReportRun", back_populates="schedule", cascade="all, delete-orphan"
+        "ReportRun",
+        back_populates="schedule",
+        # Do NOT cascade deletes to ReportRun. Run history is an audit
+        # trail — it must survive the schedule being deleted so operators
+        # can reconstruct what data was emailed to whom and when. The FK
+        # is nullable; SQLAlchemy will SET NULL on the orphaned runs
+        # rather than deleting them.
+        cascade="save-update, merge",
+        passive_deletes=True,
     )
 
 
@@ -145,8 +153,8 @@ class ReportRun(Base):
     __tablename__ = "report_runs"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    scheduled_report_id: Mapped[int] = mapped_column(
-        ForeignKey("scheduled_reports.id"), index=True
+    scheduled_report_id: Mapped[int | None] = mapped_column(
+        ForeignKey("scheduled_reports.id", ondelete="SET NULL"), nullable=True, index=True
     )
     ran_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     result_count: Mapped[int] = mapped_column(Integer, default=0)

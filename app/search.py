@@ -156,16 +156,27 @@ def _ticket_to_dict(t: Ticket) -> dict[str, Any]:
 # --- Result cache + executor -----------------------------------------
 
 
-def _cache_key(filter_json: str) -> str:
-    """Stable cache key derived from the filter JSON.
+def _cache_key(filter_json: str, scope: User | None) -> str:
+    """Stable cache key derived from the filter JSON AND the caller's scope.
 
-    The filter JSON is already canonicalized by `serialize_filter`
-    (sorted keys, normalized values), so two logically-identical
-    filters produce the same key — and therefore hit the same cache
-    entry. That's the win: a popular saved search ({status: open}) only
-    pays the SQL cost once per TTL window across the whole process.
+    The scope determines which rows _build_query returns: a customer
+    only sees their own tickets, while an agent or None sees everything.
+    Two callers with the same filter but different scopes must get
+    different cache entries — otherwise tenant A's results leak to
+    tenant B when they share a common filter (e.g., {status: open}).
+
+    Key material:
+      - scope_tag: "none" for unscoped/agent callers (same result set),
+                   "customer:<id>" for customer-scoped callers.
+      - canon_json: normalized filter (sorted keys, no None values).
     """
-    return hashlib.sha256(filter_json.encode()).hexdigest()
+    if scope is not None and scope.role == Role.customer:
+        scope_tag = f"customer:{scope.id}"
+    else:
+        # Agents and unscoped callers (analytics) see the same global view.
+        scope_tag = "none"
+    raw = f"{scope_tag}:{filter_json}"
+    return hashlib.sha256(raw.encode()).hexdigest()
 
 
 def execute_search(
@@ -190,7 +201,7 @@ def execute_search(
     canon_json = json.dumps(filter_dict, sort_keys=True, default=str)
 
     if use_cache:
-        key = _cache_key(canon_json)
+        key = _cache_key(canon_json, scope)
         now = time.time()
         hit = _cache.get(key)
         if hit is not None:
@@ -201,7 +212,7 @@ def execute_search(
     rows = [_ticket_to_dict(t) for t in db.scalars(_build_query(filter_dict, scope)).all()]
 
     if use_cache:
-        _cache[_cache_key(canon_json)] = (time.time(), rows)
+        _cache[_cache_key(canon_json, scope)] = (time.time(), rows)
     return rows
 
 
