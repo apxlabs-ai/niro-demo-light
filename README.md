@@ -1,11 +1,11 @@
 # niro-demo-light
 
-A small FastAPI helpdesk service used as a niro pentest demo target. Two roles
-(`customer`, `agent`), ticket CRUD, comments, JWT auth.
+A small FastAPI helpdesk service. Two roles (`customer`, `agent`), ticket CRUD,
+comments, JWT auth.
 
-`main` is the clean baseline. The `demo/` directory replays a vulnerability-
-introducing PR as a portable patch — `./demo/run.sh` applies it; `./demo/cleanup.sh`
-closes the resulting open PRs.
+`main` is the clean baseline. The `feature/` directory holds the next
+feature as a portable patch — `./feature/run.sh` applies it to the working
+tree; `./feature/cleanup.sh` closes any open PRs the run produced.
 
 ## Run locally
 

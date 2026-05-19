@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Close every open PR on the fixture repo and delete its branch.
-# Resets the repo to clean main for the next demo run.
+# Close every open PR on the repo and delete its branch.
+# Resets the repo to clean main for the next run.
 set -euo pipefail
 
 REPO_SLUG="apxlabs-ai/niro-demo-light"

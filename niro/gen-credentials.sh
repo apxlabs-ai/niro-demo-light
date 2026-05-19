@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Generate niro/credentials.yaml from the helpdesk's seeded fixture users.
+# Generate niro/credentials.yaml from the helpdesk's seeded local users.
 #
-# The helpdesk's seed.py creates three accounts (2 customers, 1 agent)
-# with well-known passwords. They are demo fixtures, not real secrets —
-# committing this generator is intentional. It's the "generator script"
-# pattern documented in niro/credentials.yaml.example.
+# seed.py creates three demo accounts (2 customers, 1 agent) with
+# well-known local passwords. They are not real secrets — committing
+# this generator is the "generator script" pattern documented in
+# niro/credentials.yaml.example.
 #
 # Rerun any time you want a fresh credentials.yaml.
 set -euo pipefail
@@ -17,30 +17,22 @@ cat > "$OUT" <<'EOF'
 # script to regenerate.
 credentials:
   - description: |
-      Standard customer A. Files and owns tickets that customer B does
-      not. Login: POST /auth/login with form-encoded `username` (email)
-      and `password`; response is {access_token, token_type:bearer}; send
-      the token on subsequent calls as `Authorization: Bearer <token>`.
-      Pair with customer B for horizontal-escalation tests: authenticate
-      as A, attempt to read / modify / reopen B's tickets, expect 403.
+      Standard customer A. Login: POST /auth/login with form-encoded
+      `username` (email) and `password`; response is
+      {access_token, token_type:bearer}; send the token on subsequent
+      calls as `Authorization: Bearer <token>`.
     type: username_password
     identifier: alex@customer.test
     secret: customer-pass-1234
 
   - description: |
-      Standard customer B. Files and owns tickets separate from customer
-      A. Login: same shape as customer A. Different tickets so
-      cross-customer access attempts have something to fail at.
+      Standard customer B. Login: same shape as customer A.
     type: username_password
     identifier: blair@customer.test
     secret: customer-pass-1234
 
   - description: |
-      Helpdesk agent (elevated role). Can list every ticket and PATCH
-      status / priority / assignee. Login: same shape as the customers.
-      Standard customers above must NOT reach agent-only surfaces; pair
-      this credential with each customer to verify the customer is
-      rejected on agent-only endpoints.
+      Helpdesk agent (elevated role). Login: same shape as the customers.
     type: username_password
     identifier: agent@helpdesk.test
     secret: agent-pass-1234
