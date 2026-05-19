@@ -151,6 +151,14 @@ def delete_search(
     db: Session = Depends(get_db),
 ):
     saved = _load_search_for_owner(search_id, user, db)
+    # Null-out ReportRun FKs before cascading deletes. The live SQLite
+    # schema may not carry the ON DELETE SET NULL clause (it predates
+    # that model change), so with PRAGMA foreign_keys=ON we cannot rely
+    # on the DB engine to null the FKs automatically.
+    for sched in saved.schedules:
+        for run in sched.runs:
+            run.scheduled_report_id = None
+    db.flush()
     db.delete(saved)
     db.commit()
 
@@ -249,6 +257,12 @@ def disable_schedule(
     """Disable + delete a schedule. We hard-delete here (the ReportRun
     history is preserved via SET NULL'ed FK on the runs table)."""
     sched = _load_schedule_for_owner(schedule_id, user, db)
+    # Null-out ReportRun FKs explicitly before the DELETE. The live
+    # SQLite schema may not carry the ON DELETE SET NULL clause, so with
+    # PRAGMA foreign_keys=ON we cannot rely on the DB engine to do this.
+    for run in sched.runs:
+        run.scheduled_report_id = None
+    db.flush()
     db.delete(sched)
     db.commit()
 
