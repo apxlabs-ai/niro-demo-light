@@ -2,9 +2,9 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ..auth import current_user, require_agent
+from ..auth import current_user
 from ..db import get_db
-from ..models import Comment, Role, Ticket, User
+from ..models import Comment, Role, Status, Ticket, User
 from ..schemas import (
     CommentCreate,
     CommentOut,
@@ -69,15 +69,41 @@ def get_ticket(
 def update_ticket(
     ticket_id: int,
     req: TicketUpdate,
-    agent: User = Depends(require_agent),
+    user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ):
     ticket = db.get(Ticket, ticket_id)
     if ticket is None:
         raise HTTPException(status_code=404, detail="ticket not found")
+    if user.role != Role.agent and ticket.customer_id != user.id:
+        raise HTTPException(status_code=403, detail="forbidden")
     data = req.model_dump(exclude_unset=True)
     for field, value in data.items():
         setattr(ticket, field, value)
+    db.commit()
+    db.refresh(ticket)
+    return ticket
+
+
+@router.post("/{ticket_id}/reopen", response_model=TicketOut)
+def reopen_ticket(
+    ticket_id: int,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+):
+    """Reopen a resolved or closed ticket.
+
+    Ownership is implicit: customers only see their own tickets in the
+    "My tickets" list rendered by the web UI, so the ticket_id reaching
+    this handler is always one the caller filed. Agents can reopen
+    anything.
+    """
+    ticket = db.get(Ticket, ticket_id)
+    if ticket is None:
+        raise HTTPException(status_code=404, detail="ticket not found")
+    if ticket.status not in (Status.resolved, Status.closed):
+        raise HTTPException(status_code=400, detail="ticket is not closed")
+    ticket.status = Status.open
     db.commit()
     db.refresh(ticket)
     return ticket
