@@ -196,6 +196,14 @@ def schedule_report(
     time rather than at the next worker tick."""
     saved = _load_search_for_owner(search_id, user, db)
 
+    # Customers may only schedule reports to their own email address.
+    # Agents are allowed to send to any address (e.g., team aliases).
+    if user.role != Role.agent and req.email.lower() != user.email.lower():
+        raise HTTPException(
+            status_code=403,
+            detail="scheduled reports may only be sent to your own email address",
+        )
+
     sched = ScheduledReport(
         saved_search_id=saved.id,
         frequency=req.frequency,
