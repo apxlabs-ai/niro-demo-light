@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Apply the helpdesk feature fixture to the working tree as uncommitted
+# Apply the helpdesk feature patch to the working tree as uncommitted
 # changes — as if the coding agent had just edited the files. From here, ask
 # the agent to create a branch, commit, push, and open a PR; the agent's
 # `gh pr create` is the trigger that fires the niro hook.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PATCH="$SCRIPT_DIR/fixtures/customer-can-reopen.patch"
+PATCH="$SCRIPT_DIR/patches/customer-can-reopen.patch"
 
 cd "$(git rev-parse --show-toplevel)"
 
