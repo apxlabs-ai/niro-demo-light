@@ -6,7 +6,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PATCH="$SCRIPT_DIR/patches/customer-can-reopen.patch"
+PATCH="$SCRIPT_DIR/patches/saved-searches.patch"
 
 cd "$(git rev-parse --show-toplevel)"
 
