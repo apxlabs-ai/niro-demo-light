@@ -137,11 +137,13 @@ class ScheduledReport(Base):
         back_populates="schedule",
         # Do NOT cascade deletes to ReportRun. Run history is an audit
         # trail — it must survive the schedule being deleted so operators
-        # can reconstruct what data was emailed to whom and when. The FK
-        # is nullable; SQLAlchemy will SET NULL on the orphaned runs
-        # rather than deleting them.
+        # can reconstruct what data was emailed to whom and when.
+        #
+        # passive_deletes=False (default): SQLAlchemy issues
+        # UPDATE report_runs SET scheduled_report_id=NULL before the
+        # DELETE, so orphaned runs are properly disowned even if the DB
+        # engine's FK enforcement is not enabled.
         cascade="save-update, merge",
-        passive_deletes=True,
     )
 
 

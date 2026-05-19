@@ -271,6 +271,11 @@ def list_runs(
         db.scalars(
             select(ReportRun)
             .where(ReportRun.scheduled_report_id == sched.id)
+            # Defence-in-depth: only return runs created on or after this
+            # schedule. Prevents a ROWID-reuse edge case where a deleted
+            # schedule's orphaned runs (whose FK was not yet nulled) appear
+            # under a new schedule that got the same numeric ID.
+            .where(ReportRun.ran_at >= sched.created_at)
             .order_by(ReportRun.ran_at.desc())
         )
         .all()
