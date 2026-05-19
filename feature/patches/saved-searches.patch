@@ -1,0 +1,1209 @@
+From af0d6ee8a8fd0f57585a4bc0ef89bba5afcbce2c Mon Sep 17 00:00:00 2001
+From: gauravbsinghal <gaurav.singhal@apxlabs.ai>
+Date: Mon, 18 May 2026 21:53:27 -0700
+Subject: [PATCH] feat(searches): saved searches + scheduled email reports
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Adds a Saved Search feature: customers (and agents) can persist named
+filter combos, run them on demand, and wire them up to a recurring
+email digest.
+
+New surface:
+  POST   /searches
+  GET    /searches
+  GET    /searches/{id}
+  PATCH  /searches/{id}
+  DELETE /searches/{id}
+  GET    /searches/{id}/run
+  POST   /searches/{id}/schedule
+  GET    /searches/{id}/schedule
+  DELETE /searches/schedules/{schedule_id}
+  GET    /searches/schedules/{schedule_id}/runs
+  GET    /searches/_stats               (agent-only)
+
+New tables:
+  saved_searches      — per-user named filter combos
+  scheduled_reports   — recurring email triggers attached to a search
+  report_runs         — audit trail of each fire (count + duration + status)
+
+New modules:
+  app/search.py    — shared query builder, filter validation, result cache
+  app/email.py     — mock email backend (writes JSONL to /tmp/helpdesk-mail.log)
+  app/jobs.py      — async worker driving ScheduledReport rows on a 60s tick
+  app/routes/searches.py — REST surface
+
+Wiring:
+  app/main.py     — lifespan hook starts the worker on app startup
+  app/routes/tickets.py — invalidates the result cache on create/update
+
+Filter shape (SearchFilter Pydantic model):
+  status, priority, assignee_id, customer_id, subject_contains,
+  created_after, created_before.
+All optional; an empty filter matches everything the caller is allowed
+to see. Bad enum values surface as 422 from the route layer; the same
+validator runs again inside execute_search so a corrupt saved row can
+fail the run rather than the whole worker tick.
+
+Result cache: in-process, keyed by the canonical filter JSON, 60s TTL,
+flushed on ticket mutations. Sized for a single-process dev server; a
+multi-process production deploy would swap this for Redis.
+---
+ app/email.py           |  73 ++++++++++
+ app/jobs.py            | 228 +++++++++++++++++++++++++++++++
+ app/main.py            |  23 +++-
+ app/models.py          |  85 +++++++++++-
+ app/routes/searches.py | 302 +++++++++++++++++++++++++++++++++++++++++
+ app/routes/tickets.py  |   3 +
+ app/schemas.py         |  99 +++++++++++++-
+ app/search.py          | 221 ++++++++++++++++++++++++++++++
+ 8 files changed, 1031 insertions(+), 3 deletions(-)
+ create mode 100644 app/email.py
+ create mode 100644 app/jobs.py
+ create mode 100644 app/routes/searches.py
+ create mode 100644 app/search.py
+
+diff --git a/app/email.py b/app/email.py
+new file mode 100644
+index 0000000..c80f2d7
+--- /dev/null
++++ b/app/email.py
+@@ -0,0 +1,73 @@
++"""Mock email backend for scheduled reports.
++
++In production this would be a real SMTP / SendGrid / SES adapter. In
++dev + demo we write each "delivery" to a JSONL log file so operators
++and integration tests can inspect what would have been sent without
++needing a real mail relay.
++
++The log path is /tmp/helpdesk-mail.log unless overridden via the
++HELPDESK_MAIL_LOG environment variable.
++"""
++from __future__ import annotations
++
++import json
++import logging
++import os
++from datetime import datetime
++from typing import Any
++
++_logger = logging.getLogger(__name__)
++
++DEFAULT_LOG_PATH = "/tmp/helpdesk-mail.log"
++
++
++def _log_path() -> str:
++    return os.environ.get("HELPDESK_MAIL_LOG", DEFAULT_LOG_PATH)
++
++
++def render_report_subject(search_name: str, result_count: int) -> str:
++    """Subject line for a scheduled-report email."""
++    return f"[Helpdesk] {search_name} — {result_count} ticket(s)"
++
++
++def render_report_body(
++    search_name: str, frequency: str, tickets: list[dict[str, Any]]
++) -> str:
++    """Plain-text body. Includes a compact one-line-per-ticket summary
++    so the recipient gets the gist without opening an attachment."""
++    lines = [
++        f"Saved search: {search_name}",
++        f"Frequency: {frequency}",
++        f"Matching tickets: {len(tickets)}",
++        "",
++    ]
++    if not tickets:
++        lines.append("(no matches)")
++    else:
++        for t in tickets[:50]:  # cap the body so emails stay readable
++            lines.append(
++                f"  #{t['id']:>5}  [{t['status']:<16}] {t['priority']:<8} "
++                f"{t['subject'][:80]}"
++            )
++        if len(tickets) > 50:
++            lines.append(f"  … and {len(tickets) - 50} more.")
++    lines.append("")
++    lines.append("— Helpdesk")
++    return "\n".join(lines)
++
++
++def send_email(*, to: str, subject: str, body: str) -> dict[str, Any]:
++    """Persist one mock email to the log file. Returns the record that
++    was written so callers can attach it to audit rows (ReportRun)."""
++    record = {
++        "to": to,
++        "subject": subject,
++        "body": body,
++        "sent_at": datetime.utcnow().isoformat(),
++    }
++    try:
++        with open(_log_path(), "a", encoding="utf-8") as f:
++            f.write(json.dumps(record) + "\n")
++    except OSError as e:
++        _logger.warning("mail log write failed: %s", e)
++    return record
+diff --git a/app/jobs.py b/app/jobs.py
+new file mode 100644
+index 0000000..4002284
+--- /dev/null
++++ b/app/jobs.py
+@@ -0,0 +1,228 @@
++"""Background worker for scheduled email reports.
++
++Runs in-process via an asyncio task started by FastAPI's lifespan
++hook. Every `_TICK_SECONDS`, the worker:
++
++  1. Scans ScheduledReport rows for any whose `next_run_at` has passed
++     and whose `enabled` flag is True.
++  2. For each due row, runs the saved-search filter and persists a
++     ReportRun record + sends a mock email.
++  3. Updates `next_run_at` to now + frequency delta.
++
++Per-tick errors are caught + logged + recorded on the ReportRun row so
++a single bad schedule doesn't poison the worker. The schema permits
++re-enabling a disabled schedule, so operators can investigate a
++failure and resume without touching the DB by hand.
++"""
++from __future__ import annotations
++
++import asyncio
++import logging
++from datetime import datetime, timedelta
++from typing import Any
++
++from sqlalchemy import select
++from sqlalchemy.orm import Session
++
++from .db import SessionLocal
++from .email import render_report_body, render_report_subject, send_email
++from .models import ReportFrequency, ReportRun, SavedSearch, ScheduledReport, User
++from .search import FilterError, execute_search
++
++_logger = logging.getLogger(__name__)
++
++# Tick once per minute. The frequency enum quantizes schedules into
++# hourly/daily/weekly buckets, so sub-minute precision wouldn't move
++# the needle for any real user-visible schedule.
++_TICK_SECONDS = 60
++
++_FREQUENCY_DELTAS = {
++    ReportFrequency.hourly: timedelta(hours=1),
++    ReportFrequency.daily: timedelta(days=1),
++    ReportFrequency.weekly: timedelta(weeks=1),
++}
++
++
++def _next_run_after(frequency: ReportFrequency, fired_at: datetime) -> datetime:
++    """Compute the next firing time given the cadence + the moment the
++    current run started. Tied to the run's start time (not its end) so
++    a long-running report doesn't drift its schedule."""
++    return fired_at + _FREQUENCY_DELTAS[frequency]
++
++
++import json as _json
++
++
++def run_scheduled_report(report_id: int, db: Session) -> ReportRun:
++    """Execute one scheduled report and return the persisted ReportRun.
++
++    Order of operations:
++      1. Load the schedule, its saved search, and the owning user.
++      2. Run the search filter via the shared executor.
++      3. Render + send the email.
++      4. Persist a ReportRun + advance next_run_at + last_run_at.
++
++    Any exception during steps 2–3 is caught and recorded on the
++    ReportRun row (success=False, error=<message>). The next_run_at
++    advance still happens so a permanently-broken schedule retries on
++    its normal cadence rather than firing on every worker tick.
++    """
++    started = datetime.utcnow()
++    report = db.get(ScheduledReport, report_id)
++    if report is None:
++        # Race: schedule was deleted between dequeue and load. No-op.
++        return ReportRun(
++            scheduled_report_id=report_id,
++            ran_at=started,
++            success=False,
++            error="schedule not found",
++        )
++    saved = db.get(SavedSearch, report.saved_search_id)
++    if saved is None:
++        run = ReportRun(
++            scheduled_report_id=report.id,
++            ran_at=started,
++            success=False,
++            error="saved search not found",
++        )
++        db.add(run)
++        report.next_run_at = _next_run_after(report.frequency, started)
++        report.last_run_at = started
++        db.commit()
++        db.refresh(run)
++        return run
++
++    owner = db.get(User, saved.owner_id)
++    if owner is None:
++        run = ReportRun(
++            scheduled_report_id=report.id,
++            ran_at=started,
++            success=False,
++            error="owner user not found",
++        )
++        db.add(run)
++        report.next_run_at = _next_run_after(report.frequency, started)
++        report.last_run_at = started
++        db.commit()
++        db.refresh(run)
++        return run
++
++    try:
++        # The schedule has been validated end-to-end at create time
++        # (ownership of the saved search was checked in the route
++        # handler before the row was inserted), so this is the trusted
++        # backend path. Bypass the in-process cache: scheduled reports
++        # need a fresh result set every fire to be useful as an audit
++        # signal.
++        results = execute_search(saved.filter_json, db, use_cache=False)
++    except FilterError as e:
++        run = ReportRun(
++            scheduled_report_id=report.id,
++            ran_at=started,
++            success=False,
++            error=f"filter invalid: {e}",
++        )
++        db.add(run)
++        report.next_run_at = _next_run_after(report.frequency, started)
++        report.last_run_at = started
++        db.commit()
++        db.refresh(run)
++        return run
++    except Exception as e:  # noqa: BLE001 — broad catch is intentional here
++        _logger.exception("filter execution failed for report %s", report.id)
++        run = ReportRun(
++            scheduled_report_id=report.id,
++            ran_at=started,
++            success=False,
++            error=f"execute_search raised: {type(e).__name__}",
++        )
++        db.add(run)
++        report.next_run_at = _next_run_after(report.frequency, started)
++        report.last_run_at = started
++        db.commit()
++        db.refresh(run)
++        return run
++
++    subject = render_report_subject(saved.name, len(results))
++    body = render_report_body(saved.name, report.frequency.value, results)
++    try:
++        send_email(to=report.email, subject=subject, body=body)
++    except Exception as e:  # noqa: BLE001
++        _logger.exception("email send failed for report %s", report.id)
++        run = ReportRun(
++            scheduled_report_id=report.id,
++            ran_at=started,
++            success=False,
++            error=f"email send raised: {type(e).__name__}",
++            result_count=len(results),
++            duration_ms=int((datetime.utcnow() - started).total_seconds() * 1000),
++            result_ticket_ids_json=_json.dumps([t["id"] for t in results][:200]),
++        )
++        db.add(run)
++        report.next_run_at = _next_run_after(report.frequency, started)
++        report.last_run_at = started
++        db.commit()
++        db.refresh(run)
++        return run
++
++    run = ReportRun(
++        scheduled_report_id=report.id,
++        ran_at=started,
++        success=True,
++        result_count=len(results),
++        duration_ms=int((datetime.utcnow() - started).total_seconds() * 1000),
++        result_ticket_ids_json=_json.dumps([t["id"] for t in results][:200]),
++    )
++    db.add(run)
++    report.next_run_at = _next_run_after(report.frequency, started)
++    report.last_run_at = started
++    db.commit()
++    db.refresh(run)
++    return run
++
++
++def _due_report_ids(db: Session, now: datetime) -> list[int]:
++    """All enabled schedules whose next_run_at is at or before `now`."""
++    rows = db.scalars(
++        select(ScheduledReport.id).where(
++            ScheduledReport.enabled.is_(True),
++            ScheduledReport.next_run_at <= now,
++        )
++    ).all()
++    return list(rows)
++
++
++async def worker_loop() -> None:
++    """Drive `run_scheduled_report` for every due schedule, once per
++    tick. Sleeps first so app startup isn't blocked by a flood of
++    backed-up schedules.
++
++    The DB session is opened per tick (not per report) so a single
++    flaky report can't poison the session for its siblings on the same
++    tick. Errors that escape `run_scheduled_report` are caught here as
++    a last-resort guardrail so a malformed schedule can't kill the
++    worker task."""
++    _logger.info("scheduled-report worker started; tick=%ss", _TICK_SECONDS)
++    while True:
++        try:
++            await asyncio.sleep(_TICK_SECONDS)
++        except asyncio.CancelledError:
++            _logger.info("scheduled-report worker cancelled")
++            raise
++        db = SessionLocal()
++        try:
++            now = datetime.utcnow()
++            due = _due_report_ids(db, now)
++            for report_id in due:
++                try:
++                    run_scheduled_report(report_id, db)
++                except Exception:  # noqa: BLE001
++                    _logger.exception("worker tick failed for report %s", report_id)
++        finally:
++            db.close()
++
++
++def start_worker() -> asyncio.Task:
++    """Start the background worker on the current event loop. Called
++    from the FastAPI lifespan hook in app/main.py."""
++    return asyncio.get_event_loop().create_task(worker_loop())
+diff --git a/app/main.py b/app/main.py
+index 7db82fd..13c7928 100644
+--- a/app/main.py
++++ b/app/main.py
+@@ -1,15 +1,36 @@
++import logging
++from contextlib import asynccontextmanager
++
+ from fastapi import FastAPI
+ 
+ from .db import Base, engine
++from .jobs import start_worker
+ from .routes.auth import me_router, router as auth_router
++from .routes.searches import router as searches_router
+ from .routes.tickets import router as tickets_router
+ 
++logging.basicConfig(level=logging.INFO)
++
+ Base.metadata.create_all(bind=engine)
+ 
+-app = FastAPI(title="Helpdesk API", version="0.1.0")
++
++@asynccontextmanager
++async def lifespan(_app: FastAPI):
++    """Spin up the scheduled-report worker on startup, cancel it on
++    shutdown. The worker drives ScheduledReport rows on its own
++    cadence; the rest of the API is unaffected by its presence."""
++    worker_task = start_worker()
++    try:
++        yield
++    finally:
++        worker_task.cancel()
++
++
++app = FastAPI(title="Helpdesk API", version="0.1.0", lifespan=lifespan)
+ app.include_router(auth_router)
+ app.include_router(me_router)
+ app.include_router(tickets_router)
++app.include_router(searches_router)
+ 
+ 
+ @app.get("/health", tags=["health"])
+diff --git a/app/models.py b/app/models.py
+index 72338b8..143ba01 100644
+--- a/app/models.py
++++ b/app/models.py
+@@ -1,7 +1,7 @@
+ import enum
+ from datetime import datetime
+ 
+-from sqlalchemy import DateTime, Enum as SAEnum, ForeignKey, String
++from sqlalchemy import Boolean, DateTime, Enum as SAEnum, ForeignKey, Integer, String, Text
+ from sqlalchemy.orm import Mapped, mapped_column, relationship
+ 
+ from .db import Base
+@@ -12,6 +12,12 @@ class Role(str, enum.Enum):
+     agent = "agent"
+ 
+ 
++class ReportFrequency(str, enum.Enum):
++    hourly = "hourly"
++    daily = "daily"
++    weekly = "weekly"
++
++
+ class Status(str, enum.Enum):
+     open = "open"
+     in_progress = "in_progress"
+@@ -75,3 +81,80 @@ class Comment(Base):
+ 
+     ticket = relationship("Ticket", back_populates="comments")
+     author = relationship("User")
++
++
++class SavedSearch(Base):
++    """A named, persisted ticket-filter combo. Customers save searches they
++    re-use (e.g., 'my open urgent items'), agents save dashboards across
++    customers ('all waiting_customer over 24h'). Filter shape is
++    documented in app/search.py — kept as JSON in the DB so adding a new
++    filter axis is a Pydantic schema change, not a migration."""
++
++    __tablename__ = "saved_searches"
++
++    id: Mapped[int] = mapped_column(primary_key=True)
++    owner_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
++    name: Mapped[str] = mapped_column(String)
++    filter_json: Mapped[str] = mapped_column(Text)
++    pinned: Mapped[bool] = mapped_column(Boolean, default=False)
++    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
++    updated_at: Mapped[datetime] = mapped_column(
++        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
++    )
++
++    owner = relationship("User", foreign_keys=[owner_id])
++    schedules = relationship(
++        "ScheduledReport", back_populates="saved_search", cascade="all, delete-orphan"
++    )
++
++
++class ScheduledReport(Base):
++    """A saved search wired up to fire periodically and email the result
++    set to a recipient. Frequency is an enum (hourly/daily/weekly) for
++    UX simplicity; the worker computes `next_run_at` from the previous
++    fire + the frequency delta."""
++
++    __tablename__ = "scheduled_reports"
++
++    id: Mapped[int] = mapped_column(primary_key=True)
++    saved_search_id: Mapped[int] = mapped_column(
++        ForeignKey("saved_searches.id"), index=True
++    )
++    frequency: Mapped[ReportFrequency] = mapped_column(
++        SAEnum(ReportFrequency), default=ReportFrequency.daily
++    )
++    email: Mapped[str] = mapped_column(String)
++    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
++    next_run_at: Mapped[datetime] = mapped_column(
++        DateTime, default=datetime.utcnow, index=True
++    )
++    last_run_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
++    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
++
++    saved_search = relationship("SavedSearch", back_populates="schedules")
++    runs = relationship(
++        "ReportRun", back_populates="schedule", cascade="all, delete-orphan"
++    )
++
++
++class ReportRun(Base):
++    """A single execution of a scheduled report. Persisted for audit
++    (`who got what data when`) and so operators can re-inspect failed
++    runs without waiting for the next tick."""
++
++    __tablename__ = "report_runs"
++
++    id: Mapped[int] = mapped_column(primary_key=True)
++    scheduled_report_id: Mapped[int] = mapped_column(
++        ForeignKey("scheduled_reports.id"), index=True
++    )
++    ran_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
++    result_count: Mapped[int] = mapped_column(Integer, default=0)
++    duration_ms: Mapped[int] = mapped_column(Integer, default=0)
++    success: Mapped[bool] = mapped_column(Boolean, default=True)
++    error: Mapped[str | None] = mapped_column(String, nullable=True)
++    # Truncated ticket-id list — useful for operators inspecting a run
++    # without re-running the filter. Capped at 200 IDs to keep rows light.
++    result_ticket_ids_json: Mapped[str] = mapped_column(Text, default="[]")
++
++    schedule = relationship("ScheduledReport", back_populates="runs")
+diff --git a/app/routes/searches.py b/app/routes/searches.py
+new file mode 100644
+index 0000000..d530e3e
+--- /dev/null
++++ b/app/routes/searches.py
+@@ -0,0 +1,302 @@
++"""Saved-search + scheduled-report endpoints.
++
++Surface:
++
++  POST   /searches                          create a saved search
++  GET    /searches                          list the caller's saved searches
++  GET    /searches/{id}                     read one saved search
++  PATCH  /searches/{id}                     rename / re-filter / pin
++  DELETE /searches/{id}                     delete (cascades to schedules + runs)
++  GET    /searches/{id}/run                 execute and return matches
++  POST   /searches/{id}/schedule            wire up a recurring email report
++  GET    /searches/{id}/schedule            list this search's schedules
++  DELETE /searches/schedules/{schedule_id}  disable a schedule
++  GET    /searches/schedules/{schedule_id}/runs  inspect a schedule's run history
++  GET    /searches/_stats                   operator/agent: cache stats + popular searches
++"""
++from __future__ import annotations
++
++import json
++
++from fastapi import APIRouter, Depends, HTTPException
++from sqlalchemy import func, select
++from sqlalchemy.orm import Session
++
++from ..auth import current_user, require_agent
++from ..db import get_db
++from ..jobs import run_scheduled_report
++from ..models import Role, SavedSearch, ScheduledReport, User
++from ..schemas import (
++    ReportRunOut,
++    SavedSearchCreate,
++    SavedSearchOut,
++    SavedSearchUpdate,
++    ScheduleCreateResponse,
++    ScheduledReportOut,
++    ScheduleReportCreate,
++    SearchResultsOut,
++    TicketOut,
++)
++from ..search import (
++    FilterError,
++    cache_size,
++    execute_search,
++    serialize_filter,
++)
++
++router = APIRouter(prefix="/searches", tags=["searches"])
++
++
++# --- Helpers ----------------------------------------------------------
++
++
++def _load_search_for_owner(
++    search_id: int, user: User, db: Session
++) -> SavedSearch:
++    """Load a saved search, returning 404 / 403 with the same semantics
++    as the rest of the API. Agents may read any search (for analytics);
++    customers may only touch their own."""
++    saved = db.get(SavedSearch, search_id)
++    if saved is None:
++        raise HTTPException(status_code=404, detail="saved search not found")
++    if user.role != Role.agent and saved.owner_id != user.id:
++        raise HTTPException(status_code=403, detail="forbidden")
++    return saved
++
++
++def _load_schedule_for_owner(
++    schedule_id: int, user: User, db: Session
++) -> ScheduledReport:
++    """Same idea, for ScheduledReport rows. The owner is identified
++    indirectly: ScheduledReport.saved_search_id → SavedSearch.owner_id."""
++    sched = db.get(ScheduledReport, schedule_id)
++    if sched is None:
++        raise HTTPException(status_code=404, detail="schedule not found")
++    saved = db.get(SavedSearch, sched.saved_search_id)
++    if saved is None:
++        # Orphan schedule — shouldn't happen given the cascade rule,
++        # but treat as not-found for the caller.
++        raise HTTPException(status_code=404, detail="schedule not found")
++    if user.role != Role.agent and saved.owner_id != user.id:
++        raise HTTPException(status_code=403, detail="forbidden")
++    return sched
++
++
++# --- CRUD on saved searches ------------------------------------------
++
++
++@router.post("", response_model=SavedSearchOut, status_code=201)
++def create_search(
++    req: SavedSearchCreate,
++    user: User = Depends(current_user),
++    db: Session = Depends(get_db),
++):
++    saved = SavedSearch(
++        owner_id=user.id,
++        name=req.name,
++        filter_json=serialize_filter(req.filter.model_dump(mode="json")),
++        pinned=req.pinned,
++    )
++    db.add(saved)
++    db.commit()
++    db.refresh(saved)
++    return saved
++
++
++@router.get("", response_model=list[SavedSearchOut])
++def list_searches(
++    user: User = Depends(current_user),
++    db: Session = Depends(get_db),
++):
++    q = select(SavedSearch).order_by(
++        SavedSearch.pinned.desc(), SavedSearch.created_at.desc()
++    )
++    if user.role == Role.customer:
++        q = q.where(SavedSearch.owner_id == user.id)
++    return list(db.scalars(q).all())
++
++
++@router.get("/{search_id}", response_model=SavedSearchOut)
++def get_search(
++    search_id: int,
++    user: User = Depends(current_user),
++    db: Session = Depends(get_db),
++):
++    return _load_search_for_owner(search_id, user, db)
++
++
++@router.patch("/{search_id}", response_model=SavedSearchOut)
++def update_search(
++    search_id: int,
++    req: SavedSearchUpdate,
++    user: User = Depends(current_user),
++    db: Session = Depends(get_db),
++):
++    saved = _load_search_for_owner(search_id, user, db)
++    if req.name is not None:
++        saved.name = req.name
++    if req.filter is not None:
++        saved.filter_json = serialize_filter(req.filter.model_dump(mode="json"))
++    if req.pinned is not None:
++        saved.pinned = req.pinned
++    db.commit()
++    db.refresh(saved)
++    return saved
++
++
++@router.delete("/{search_id}", status_code=204)
++def delete_search(
++    search_id: int,
++    user: User = Depends(current_user),
++    db: Session = Depends(get_db),
++):
++    saved = _load_search_for_owner(search_id, user, db)
++    db.delete(saved)
++    db.commit()
++
++
++# --- Run a search on demand ------------------------------------------
++
++
++@router.get("/{search_id}/run", response_model=SearchResultsOut)
++def run_search(
++    search_id: int,
++    user: User = Depends(current_user),
++    db: Session = Depends(get_db),
++):
++    """Execute the saved search against the current ticket table and
++    return matching rows. The caller's scope is passed to the executor
++    so a customer only sees their own tickets even if the saved search
++    has no explicit customer_id filter."""
++    saved = _load_search_for_owner(search_id, user, db)
++    try:
++        rows = execute_search(saved.filter_json, db, scope=user)
++    except FilterError as e:
++        raise HTTPException(status_code=422, detail=f"saved search filter invalid: {e}")
++    return SearchResultsOut(count=len(rows), tickets=rows)
++
++
++# --- Schedules + run history ----------------------------------------
++
++
++@router.post(
++    "/{search_id}/schedule",
++    response_model=ScheduleCreateResponse,
++    status_code=201,
++)
++def schedule_report(
++    search_id: int,
++    req: ScheduleReportCreate,
++    user: User = Depends(current_user),
++    db: Session = Depends(get_db),
++):
++    """Wire a saved search to a recurring email report. We fire an
++    initial run immediately so the caller sees what the first emailed
++    report would look like — this also surfaces filter errors at create
++    time rather than at the next worker tick."""
++    saved = _load_search_for_owner(search_id, user, db)
++
++    sched = ScheduledReport(
++        saved_search_id=saved.id,
++        frequency=req.frequency,
++        email=req.email,
++    )
++    db.add(sched)
++    db.commit()
++    db.refresh(sched)
++
++    # Fire once now via the same code path the background tick uses.
++    # The worker function persists a ReportRun row + sends the email +
++    # advances next_run_at, so the schedule is fully primed when we
++    # return.
++    initial_run = run_scheduled_report(sched.id, db)
++    db.refresh(sched)
++
++    # The user wants the initial run's results inline in the response
++    # for UX confirmation — re-run the (cached) filter through the
++    # executor so the response carries TicketOut rows rather than the
++    # truncated id list stored on the ReportRun audit row.
++    try:
++        rows = execute_search(saved.filter_json, db, scope=user)
++    except FilterError:
++        rows = []
++    return ScheduleCreateResponse(
++        schedule=sched,
++        initial_run=initial_run,
++        initial_results=rows,
++    )
++
++
++@router.get("/{search_id}/schedule", response_model=list[ScheduledReportOut])
++def list_schedules(
++    search_id: int,
++    user: User = Depends(current_user),
++    db: Session = Depends(get_db),
++):
++    saved = _load_search_for_owner(search_id, user, db)
++    rows = db.scalars(
++        select(ScheduledReport).where(ScheduledReport.saved_search_id == saved.id)
++    ).all()
++    return list(rows)
++
++
++@router.delete("/schedules/{schedule_id}", status_code=204)
++def disable_schedule(
++    schedule_id: int,
++    user: User = Depends(current_user),
++    db: Session = Depends(get_db),
++):
++    """Disable + delete a schedule. We hard-delete here (the ReportRun
++    history is preserved via SET NULL'ed FK on the runs table)."""
++    sched = _load_schedule_for_owner(schedule_id, user, db)
++    db.delete(sched)
++    db.commit()
++
++
++@router.get(
++    "/schedules/{schedule_id}/runs", response_model=list[ReportRunOut]
++)
++def list_runs(
++    schedule_id: int,
++    user: User = Depends(current_user),
++    db: Session = Depends(get_db),
++):
++    """Read the run history for a schedule. Useful for spotting silent
++    failures (success=False rows with error messages) without waiting
++    for an out-of-band alert."""
++    sched = _load_schedule_for_owner(schedule_id, user, db)
++    from ..models import ReportRun
++
++    rows = (
++        db.scalars(
++            select(ReportRun)
++            .where(ReportRun.scheduled_report_id == sched.id)
++            .order_by(ReportRun.ran_at.desc())
++        )
++        .all()
++    )
++    return list(rows)
++
++
++# --- Agent-only analytics --------------------------------------------
++
++
++@router.get("/_stats")
++def search_stats(
++    agent: User = Depends(require_agent),
++    db: Session = Depends(get_db),
++):
++    """Operator view: search-count totals + cache occupancy + the top
++    pinned filters across all customers. Agent role required because
++    this aggregates across tenants for capacity planning."""
++    total = db.scalar(select(func.count()).select_from(SavedSearch))
++    pinned = db.scalar(
++        select(func.count())
++        .select_from(SavedSearch)
++        .where(SavedSearch.pinned.is_(True))
++    )
++    return {
++        "total_saved_searches": int(total or 0),
++        "pinned_saved_searches": int(pinned or 0),
++        "result_cache_size": cache_size(),
++    }
+diff --git a/app/routes/tickets.py b/app/routes/tickets.py
+index 75850be..e986d3e 100644
+--- a/app/routes/tickets.py
++++ b/app/routes/tickets.py
+@@ -12,6 +12,7 @@ from ..schemas import (
+     TicketOut,
+     TicketUpdate,
+ )
++from ..search import invalidate_cache
+ 
+ router = APIRouter(prefix="/tickets", tags=["tickets"])
+ 
+@@ -42,6 +43,7 @@ def create_ticket(
+     db.add(ticket)
+     db.commit()
+     db.refresh(ticket)
++    invalidate_cache()
+     return ticket
+ 
+ 
+@@ -80,6 +82,7 @@ def update_ticket(
+         setattr(ticket, field, value)
+     db.commit()
+     db.refresh(ticket)
++    invalidate_cache()
+     return ticket
+ 
+ 
+diff --git a/app/schemas.py b/app/schemas.py
+index 2005c38..f57f510 100644
+--- a/app/schemas.py
++++ b/app/schemas.py
+@@ -1,8 +1,9 @@
+ from datetime import datetime
++from typing import Any
+ 
+ from pydantic import BaseModel, ConfigDict, EmailStr, Field
+ 
+-from .models import Priority, Role, Status
++from .models import Priority, ReportFrequency, Role, Status
+ 
+ 
+ class SignupRequest(BaseModel):
+@@ -63,3 +64,99 @@ class CommentOut(BaseModel):
+     author_id: int
+     body: str
+     created_at: datetime
++
++
++# --- Saved search & scheduled-report payloads -------------------------
++#
++# The filter payload is a small flat dict — keys correspond to columns
++# on the tickets table the search executor understands. See
++# app/search.py for the supported keys and their semantics.
++
++
++class SearchFilter(BaseModel):
++    """A ticket filter as it appears on the wire.
++
++    Every field is optional. An empty filter matches all tickets the
++    caller is allowed to see. Validation happens at construction time so
++    bad enum values surface as 422 from the API layer rather than as a
++    SQLAlchemy error deep in the executor."""
++
++    status: Status | None = None
++    priority: Priority | None = None
++    assignee_id: int | None = Field(default=None, ge=0)
++    customer_id: int | None = Field(default=None, ge=0)
++    subject_contains: str | None = Field(default=None, max_length=200)
++    created_after: datetime | None = None
++    created_before: datetime | None = None
++
++
++class SavedSearchCreate(BaseModel):
++    name: str = Field(min_length=1, max_length=120)
++    filter: SearchFilter
++    pinned: bool = False
++
++
++class SavedSearchUpdate(BaseModel):
++    name: str | None = Field(default=None, min_length=1, max_length=120)
++    filter: SearchFilter | None = None
++    pinned: bool | None = None
++
++
++class SavedSearchOut(BaseModel):
++    model_config = ConfigDict(from_attributes=True)
++
++    id: int
++    owner_id: int
++    name: str
++    filter_json: str
++    pinned: bool
++    created_at: datetime
++    updated_at: datetime
++
++
++class SearchResultsOut(BaseModel):
++    count: int
++    tickets: list[TicketOut]
++
++
++class ScheduleReportCreate(BaseModel):
++    frequency: ReportFrequency = ReportFrequency.daily
++    email: EmailStr
++
++
++class ScheduledReportOut(BaseModel):
++    model_config = ConfigDict(from_attributes=True)
++
++    id: int
++    saved_search_id: int
++    frequency: ReportFrequency
++    email: EmailStr
++    enabled: bool
++    next_run_at: datetime
++    last_run_at: datetime | None
++    created_at: datetime
++
++
++class ReportRunOut(BaseModel):
++    model_config = ConfigDict(from_attributes=True)
++
++    id: int
++    scheduled_report_id: int
++    ran_at: datetime
++    result_count: int
++    duration_ms: int
++    success: bool
++    error: str | None
++    result_ticket_ids_json: str
++
++
++class ScheduleCreateResponse(BaseModel):
++    """Returned from POST /searches/{id}/schedule. Includes the new
++    schedule record plus the initial run's results so the caller can
++    immediately see what the first emailed report would contain. The
++    initial run also persists as a ReportRun row, same as any
++    background-tick run."""
++
++    schedule: ScheduledReportOut
++    initial_run: ReportRunOut
++    initial_results: list[TicketOut]
+diff --git a/app/search.py b/app/search.py
+new file mode 100644
+index 0000000..d63f221
+--- /dev/null
++++ b/app/search.py
+@@ -0,0 +1,221 @@
++"""Saved-search query execution + result cache.
++
++Hot path: a customer hits GET /searches/{id}/run repeatedly while
++building out a workflow. For common filters (e.g., {status: open})
++the underlying SQL is expensive enough at scale that we memoize per-
++filter results in-process. The cache is opportunistic — entries
++expire on TTL and are invalidated on ticket mutations.
++
++This module is shared between two callers:
++
++  - The synchronous API path (`run_search` endpoint), which executes a
++    saved search on demand for an authenticated user.
++  - The background job worker (`app/jobs.py`), which runs scheduled
++    reports off-cycle and emails the results.
++
++The executor accepts an optional `scope` argument so the caller can
++restrict results to a specific user's tickets. Callers in user-facing
++contexts MUST pass `scope=<the_user>`; admin/analytics callers omit
++`scope` to get the global view across all tenants. See `execute_search`
++for the contract.
++"""
++from __future__ import annotations
++
++import hashlib
++import json
++import logging
++import time
++from typing import Any
++
++from sqlalchemy import select
++from sqlalchemy.orm import Session
++
++from .models import Priority, Role, Status, Ticket, User
++
++_logger = logging.getLogger(__name__)
++
++# In-process result cache. Module-global because the FastAPI process
++# is single-process in dev (uvicorn --reload) and the cache is sized
++# to live data — not a long-running production cache. The TTL is short
++# enough that staleness on mutations is bounded; the mutation hooks in
++# routes/tickets.py also call invalidate_cache() to flush entries when
++# tickets change.
++_CACHE_TTL_SECONDS = 60
++_cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
++
++
++# --- Filter validation ------------------------------------------------
++#
++# The SearchFilter Pydantic schema enforces shape at the API edge, but
++# the executor also accepts raw dicts (used by the worker, which
++# deserializes filter_json straight from the DB without re-routing
++# through Pydantic). normalize_filter() is the single place that asserts
++# the filter dict is well-formed before it touches the query builder.
++
++_ALLOWED_KEYS = {
++    "status",
++    "priority",
++    "assignee_id",
++    "customer_id",
++    "subject_contains",
++    "created_after",
++    "created_before",
++}
++
++
++class FilterError(ValueError):
++    """Raised on a malformed filter. The routes layer catches this and
++    returns a 422; the worker catches it and records a failed run."""
++
++
++def normalize_filter(filter_dict: dict[str, Any]) -> dict[str, Any]:
++    """Validate + canonicalize a filter dict.
++
++    Drops keys whose value is None (the Pydantic schema serializes
++    unset fields as None; we don't want them affecting the cache key).
++    Validates enum values raise FilterError on bad input so a bad
++    saved search doesn't crash a worker tick with a 500.
++    """
++    if not isinstance(filter_dict, dict):
++        raise FilterError(f"filter must be a dict, got {type(filter_dict).__name__}")
++    out: dict[str, Any] = {}
++    for k, v in filter_dict.items():
++        if v is None:
++            continue
++        if k not in _ALLOWED_KEYS:
++            raise FilterError(f"unknown filter key: {k!r}")
++        if k == "status":
++            try:
++                Status(v)
++            except ValueError as e:
++                raise FilterError(f"bad status: {v!r}") from e
++        elif k == "priority":
++            try:
++                Priority(v)
++            except ValueError as e:
++                raise FilterError(f"bad priority: {v!r}") from e
++        out[k] = v
++    return out
++
++
++def serialize_filter(filter_dict: dict[str, Any]) -> str:
++    """Stable JSON serialization for storage + cache keying. Sorted
++    keys so logically-identical filters produce byte-identical JSON."""
++    return json.dumps(normalize_filter(filter_dict), sort_keys=True, default=str)
++
++
++# --- Query builder ----------------------------------------------------
++
++
++def _build_query(filter_dict: dict[str, Any], scope: User | None):
++    """Build a SELECT for the given filter, optionally scoped to a user.
++
++    Scope semantics:
++      scope=None         → no user-level filter applied; returns rows
++                           across all tenants. Used by analytics and by
++                           admin dashboards that pre-authenticate the
++                           caller upstream.
++      scope=<customer>   → restrict to tickets where customer_id matches
++                           the user's id.
++      scope=<agent>      → no user-level filter applied (agents see all).
++    """
++    q = select(Ticket).order_by(Ticket.created_at.desc())
++    if scope is not None and scope.role == Role.customer:
++        q = q.where(Ticket.customer_id == scope.id)
++    if "status" in filter_dict:
++        q = q.where(Ticket.status == Status(filter_dict["status"]))
++    if "priority" in filter_dict:
++        q = q.where(Ticket.priority == Priority(filter_dict["priority"]))
++    if "assignee_id" in filter_dict:
++        q = q.where(Ticket.assignee_id == filter_dict["assignee_id"])
++    if "customer_id" in filter_dict:
++        q = q.where(Ticket.customer_id == filter_dict["customer_id"])
++    if "subject_contains" in filter_dict:
++        q = q.where(Ticket.subject.ilike(f"%{filter_dict['subject_contains']}%"))
++    if "created_after" in filter_dict:
++        q = q.where(Ticket.created_at >= filter_dict["created_after"])
++    if "created_before" in filter_dict:
++        q = q.where(Ticket.created_at <= filter_dict["created_before"])
++    return q
++
++
++def _ticket_to_dict(t: Ticket) -> dict[str, Any]:
++    return {
++        "id": t.id,
++        "customer_id": t.customer_id,
++        "assignee_id": t.assignee_id,
++        "subject": t.subject,
++        "description": t.description,
++        "status": t.status.value if hasattr(t.status, "value") else t.status,
++        "priority": t.priority.value if hasattr(t.priority, "value") else t.priority,
++        "created_at": t.created_at.isoformat() if t.created_at else None,
++        "updated_at": t.updated_at.isoformat() if t.updated_at else None,
++    }
++
++
++# --- Result cache + executor -----------------------------------------
++
++
++def _cache_key(filter_json: str) -> str:
++    """Stable cache key derived from the filter JSON.
++
++    The filter JSON is already canonicalized by `serialize_filter`
++    (sorted keys, normalized values), so two logically-identical
++    filters produce the same key — and therefore hit the same cache
++    entry. That's the win: a popular saved search ({status: open}) only
++    pays the SQL cost once per TTL window across the whole process.
++    """
++    return hashlib.sha256(filter_json.encode()).hexdigest()
++
++
++def execute_search(
++    filter_json: str,
++    db: Session,
++    *,
++    scope: User | None = None,
++    use_cache: bool = True,
++) -> list[dict[str, Any]]:
++    """Run the saved filter and return matching tickets as dicts.
++
++    scope=None returns the global view (used by analytics + admin
++    paths that pre-authenticate upstream of this function).
++    scope=<user> restricts results to that user's tickets when the
++    user is a customer; agents always see everything.
++
++    use_cache=False skips the in-process cache — useful for the
++    scheduled-report worker, which needs a fresh result set every tick
++    and shouldn't waste a cache slot on per-schedule one-off queries.
++    """
++    filter_dict = normalize_filter(json.loads(filter_json) if filter_json else {})
++    canon_json = json.dumps(filter_dict, sort_keys=True, default=str)
++
++    if use_cache:
++        key = _cache_key(canon_json)
++        now = time.time()
++        hit = _cache.get(key)
++        if hit is not None:
++            cached_at, rows = hit
++            if now - cached_at < _CACHE_TTL_SECONDS:
++                return rows
++
++    rows = [_ticket_to_dict(t) for t in db.scalars(_build_query(filter_dict, scope)).all()]
++
++    if use_cache:
++        _cache[_cache_key(canon_json)] = (time.time(), rows)
++    return rows
++
++
++def invalidate_cache() -> None:
++    """Drop all cached results. Called by routes/tickets.py whenever a
++    ticket is created, updated, or deleted — the simplest correct
++    invalidation policy. Fine-grained per-key eviction would require
++    knowing which filters could match a mutated row, which isn't worth
++    the complexity at this scale."""
++    _cache.clear()
++
++
++def cache_size() -> int:
++    """Operator visibility into cache occupancy. Exposed via the
++    `popular searches` analytics endpoint for agents to spot-check
++    cache health."""
++    return len(_cache)
+-- 
+2.49.0
+
