@@ -3,8 +3,9 @@
 A small FastAPI helpdesk service used as a niro pentest demo target. Two roles
 (`customer`, `agent`), ticket CRUD, comments, JWT auth.
 
-`main` is the clean baseline. The `demo/` directory replays vulnerability-
-introducing PRs as portable patches; see `demo/README.md`.
+`main` is the clean baseline. The `demo/` directory replays a vulnerability-
+introducing PR as a portable patch — `./demo/run.sh` applies it; `./demo/cleanup.sh`
+closes the resulting open PRs.
 
 ## Run locally
 
