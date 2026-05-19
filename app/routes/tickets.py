@@ -65,6 +65,9 @@ def get_ticket(
     return _load_ticket_for_read(ticket_id, user, db)
 
 
+_AGENT_ONLY_FIELDS = {"status", "priority", "assignee_id"}
+
+
 @router.patch("/{ticket_id}", response_model=TicketOut)
 def update_ticket(
     ticket_id: int,
@@ -78,6 +81,8 @@ def update_ticket(
     if user.role != Role.agent and ticket.customer_id != user.id:
         raise HTTPException(status_code=403, detail="forbidden")
     data = req.model_dump(exclude_unset=True)
+    if user.role != Role.agent and _AGENT_ONLY_FIELDS & data.keys():
+        raise HTTPException(status_code=403, detail="agent role required to update these fields")
     for field, value in data.items():
         setattr(ticket, field, value)
     db.commit()
@@ -91,16 +96,11 @@ def reopen_ticket(
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ):
-    """Reopen a resolved or closed ticket.
-
-    Ownership is implicit: customers only see their own tickets in the
-    "My tickets" list rendered by the web UI, so the ticket_id reaching
-    this handler is always one the caller filed. Agents can reopen
-    anything.
-    """
     ticket = db.get(Ticket, ticket_id)
     if ticket is None:
         raise HTTPException(status_code=404, detail="ticket not found")
+    if user.role != Role.agent and ticket.customer_id != user.id:
+        raise HTTPException(status_code=403, detail="forbidden")
     if ticket.status not in (Status.resolved, Status.closed):
         raise HTTPException(status_code=400, detail="ticket is not closed")
     ticket.status = Status.open
