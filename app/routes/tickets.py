@@ -12,6 +12,7 @@ from ..schemas import (
     TicketOut,
     TicketUpdate,
 )
+from ..search import invalidate_cache
 
 router = APIRouter(prefix="/tickets", tags=["tickets"])
 
@@ -42,6 +43,7 @@ def create_ticket(
     db.add(ticket)
     db.commit()
     db.refresh(ticket)
+    invalidate_cache()
     return ticket
 
 
@@ -80,6 +82,7 @@ def update_ticket(
         setattr(ticket, field, value)
     db.commit()
     db.refresh(ticket)
+    invalidate_cache()
     return ticket
 
 
