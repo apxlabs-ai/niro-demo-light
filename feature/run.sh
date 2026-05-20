@@ -1,21 +1,35 @@
 #!/usr/bin/env bash
-# Apply the helpdesk feature patch to the working tree as uncommitted
-# changes — as if the coding agent had just edited the files. From here, ask
-# the agent to create a branch, commit, push, and open a PR; the agent's
-# `gh pr create` is the trigger that fires the niro hook.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PATCH="$SCRIPT_DIR/patches/saved-searches.patch"
 
+BASE_BRANCH="${BASE_BRANCH:-main}"
+NEW_BRANCH="${NEW_BRANCH:-feature/saved-searches-$(date +%Y%m%d-%H%M%S)}"
+PRE_COMMIT_MSG="${PRE_COMMIT_MSG:-save local changes before switching branches}"
+PATCH_COMMIT_MSG="${1:-apply helpdesk saved searches patch}"
+
 cd "$(git rev-parse --show-toplevel)"
 
-if ! git diff --quiet || ! git diff --cached --quiet; then
-  echo "working tree has tracked changes; commit or stash first" >&2
-  exit 1
+# Commit current local changes, including untracked files
+if ! git diff --quiet || ! git diff --cached --quiet || [ -n "$(git ls-files --others --exclude-standard)" ]; then
+  git add -A
+  git commit -m "$PRE_COMMIT_MSG"
+  echo "→ existing local changes committed."
 fi
 
-git apply "$PATCH"
+# Move to main and update it
+git switch "$BASE_BRANCH"
+git pull --ff-only origin "$BASE_BRANCH"
 
-echo "→ helpdesk changes applied to the working tree (uncommitted)."
-echo "→ next: ask your coding agent to branch, commit, push, and open a PR."
+# Create a fresh branch
+git switch -c "$NEW_BRANCH"
+
+# Apply patch and commit it
+git apply "$PATCH"
+git add -A
+git commit -m "$PATCH_COMMIT_MSG"
+
+echo "→ switched to $BASE_BRANCH, created $NEW_BRANCH, applied patch, and committed."
+echo "→ current branch: $(git branch --show-current)"
+echo "→ next: codex can start with a clean working tree."
