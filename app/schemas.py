@@ -147,7 +147,6 @@ class ReportRunOut(BaseModel):
     duration_ms: int
     success: bool
     error: str | None
-    result_ticket_ids_json: str
 
 
 class ScheduleCreateResponse(BaseModel):
