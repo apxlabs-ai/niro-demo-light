@@ -194,7 +194,7 @@ def schedule_report(
     initial run immediately so the caller sees what the first emailed
     report would look like — this also surfaces filter errors at create
     time rather than at the next worker tick."""
-    saved = _load_search_for_owner(search_id, user, db)
+    saved = _load_search_for_owner(search_id, user, db, write=True)
 
     sched = ScheduledReport(
         saved_search_id=saved.id,
