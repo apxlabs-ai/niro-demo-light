@@ -7,12 +7,17 @@
           {
             "type": "command",
             "if": "Bash(git push *)",
-            "command": ".claude/hooks/niro-on-push.sh --agent claude"
+            "command": "niro hook --event=post-tool-use --agent=claude"
           },
           {
             "type": "command",
             "if": "Bash(gh pr create *)",
-            "command": ".claude/hooks/niro-on-push.sh --agent claude"
+            "command": "niro hook --event=post-tool-use --agent=claude"
+          },
+          {
+            "type": "command",
+            "if": "Bash(az repos pr create *)",
+            "command": "niro hook --event=post-tool-use --agent=claude"
           }
         ]
       }
