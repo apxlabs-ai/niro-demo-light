@@ -199,7 +199,7 @@ def schedule_report(
     sched = ScheduledReport(
         saved_search_id=saved.id,
         frequency=req.frequency,
-        email=req.email,
+        email=user.email,
     )
     db.add(sched)
     db.commit()
@@ -246,10 +246,9 @@ def disable_schedule(
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ):
-    """Disable + delete a schedule. We hard-delete here (the ReportRun
-    history is preserved via SET NULL'ed FK on the runs table)."""
+    """Soft-disable a schedule so its ReportRun audit history is preserved."""
     sched = _load_schedule_for_owner(schedule_id, user, db)
-    db.delete(sched)
+    sched.enabled = False
     db.commit()
 
 
