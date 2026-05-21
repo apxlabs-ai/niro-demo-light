@@ -21,7 +21,7 @@ class UserOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
-    email: EmailStr
+    email: str
     full_name: str
     role: Role
 
@@ -129,7 +129,7 @@ class ScheduledReportOut(BaseModel):
     id: int
     saved_search_id: int
     frequency: ReportFrequency
-    email: EmailStr
+    email: str
     enabled: bool
     next_run_at: datetime
     last_run_at: datetime | None
