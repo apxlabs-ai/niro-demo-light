@@ -121,7 +121,11 @@ class SearchResultsOut(BaseModel):
 
 class ScheduleReportCreate(BaseModel):
     frequency: ReportFrequency = ReportFrequency.daily
-    email: EmailStr
+    # str instead of EmailStr so test/demo accounts with non-standard TLDs
+    # (e.g. .test) can still create schedules.  The route validates that the
+    # address matches the caller's own account email, which is the meaningful
+    # security boundary here.
+    email: str
 
 
 class ScheduledReportOut(BaseModel):
@@ -130,7 +134,7 @@ class ScheduledReportOut(BaseModel):
     id: int
     saved_search_id: int
     frequency: ReportFrequency
-    email: EmailStr
+    email: str
     enabled: bool
     next_run_at: datetime
     last_run_at: datetime | None

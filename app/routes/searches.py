@@ -282,18 +282,24 @@ def list_runs(
             .order_by(ReportRun.ran_at.desc())
         ).all()
     )
-    if user.role == Role.customer:
-        owned_ids = {
-            t.id for t in db.scalars(
-                select(Ticket).where(Ticket.customer_id == user.id)
-            ).all()
-        }
-        for row in rows:
-            stored = json.loads(row.result_ticket_ids_json or "[]")
-            row.result_ticket_ids_json = json.dumps(
-                [i for i in stored if i in owned_ids]
-            )
-    return rows
+    if user.role != Role.customer:
+        return rows
+    owned_ids = {
+        t.id for t in db.scalars(
+            select(Ticket).where(Ticket.customer_id == user.id)
+        ).all()
+    }
+    # Build new Pydantic objects with filtered IDs rather than mutating
+    # ORM instances in-place — avoids any SQLAlchemy session write-tracking
+    # side-effects that could silently revert the change.
+    result = []
+    for row in rows:
+        out = ReportRunOut.model_validate(row)
+        stored = json.loads(out.result_ticket_ids_json or "[]")
+        result.append(out.model_copy(update={
+            "result_ticket_ids_json": json.dumps([i for i in stored if i in owned_ids])
+        }))
+    return result
 
 
 # --- Agent-only analytics --------------------------------------------
