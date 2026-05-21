@@ -25,7 +25,7 @@ from sqlalchemy.orm import Session
 from ..auth import current_user, require_agent
 from ..db import get_db
 from ..jobs import run_scheduled_report
-from ..models import Role, SavedSearch, ScheduledReport, User
+from ..models import ReportRun, Role, SavedSearch, ScheduledReport, Ticket, User
 from ..schemas import (
     ReportRunOut,
     SavedSearchCreate,
@@ -51,15 +51,20 @@ router = APIRouter(prefix="/searches", tags=["searches"])
 
 
 def _load_search_for_owner(
-    search_id: int, user: User, db: Session
+    search_id: int, user: User, db: Session, *, write: bool = False
 ) -> SavedSearch:
-    """Load a saved search, returning 404 / 403 with the same semantics
-    as the rest of the API. Agents may read any search (for analytics);
-    customers may only touch their own."""
+    """Load a saved search, returning 404 / 403.
+
+    Agents may read any search (for analytics) but may NOT mutate one
+    they don't own — pass write=True on PATCH/DELETE paths to enforce
+    the ownership check regardless of role.
+    """
     saved = db.get(SavedSearch, search_id)
     if saved is None:
         raise HTTPException(status_code=404, detail="saved search not found")
-    if user.role != Role.agent and saved.owner_id != user.id:
+    is_owner = saved.owner_id == user.id
+    can_read_as_agent = (user.role == Role.agent and not write)
+    if not is_owner and not can_read_as_agent:
         raise HTTPException(status_code=403, detail="forbidden")
     return saved
 
@@ -132,7 +137,7 @@ def update_search(
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ):
-    saved = _load_search_for_owner(search_id, user, db)
+    saved = _load_search_for_owner(search_id, user, db, write=True)
     if req.name is not None:
         saved.name = req.name
     if req.filter is not None:
@@ -150,7 +155,7 @@ def delete_search(
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ):
-    saved = _load_search_for_owner(search_id, user, db)
+    saved = _load_search_for_owner(search_id, user, db, write=True)
     db.delete(saved)
     db.commit()
 
@@ -194,6 +199,11 @@ def schedule_report(
     initial run immediately so the caller sees what the first emailed
     report would look like — this also surfaces filter errors at create
     time rather than at the next worker tick."""
+    if req.email != user.email:
+        raise HTTPException(
+            status_code=422,
+            detail="report email must match your account email",
+        )
     saved = _load_search_for_owner(search_id, user, db)
 
     sched = ScheduledReport(
@@ -265,17 +275,25 @@ def list_runs(
     failures (success=False rows with error messages) without waiting
     for an out-of-band alert."""
     sched = _load_schedule_for_owner(schedule_id, user, db)
-    from ..models import ReportRun
-
-    rows = (
+    rows = list(
         db.scalars(
             select(ReportRun)
             .where(ReportRun.scheduled_report_id == sched.id)
             .order_by(ReportRun.ran_at.desc())
-        )
-        .all()
+        ).all()
     )
-    return list(rows)
+    if user.role == Role.customer:
+        owned_ids = {
+            t.id for t in db.scalars(
+                select(Ticket).where(Ticket.customer_id == user.id)
+            ).all()
+        }
+        for row in rows:
+            stored = json.loads(row.result_ticket_ids_json or "[]")
+            row.result_ticket_ids_json = json.dumps(
+                [i for i in stored if i in owned_ids]
+            )
+    return rows
 
 
 # --- Agent-only analytics --------------------------------------------
