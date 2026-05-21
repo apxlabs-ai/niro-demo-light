@@ -140,7 +140,7 @@ class ReportRunOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
-    scheduled_report_id: int
+    scheduled_report_id: int | None
     ran_at: datetime
     result_count: int
     duration_ms: int

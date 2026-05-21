@@ -132,9 +132,7 @@ class ScheduledReport(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     saved_search = relationship("SavedSearch", back_populates="schedules")
-    runs = relationship(
-        "ReportRun", back_populates="schedule", cascade="all, delete-orphan"
-    )
+    runs = relationship("ReportRun", back_populates="schedule", cascade="save-update, merge")
 
 
 class ReportRun(Base):
@@ -145,8 +143,8 @@ class ReportRun(Base):
     __tablename__ = "report_runs"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    scheduled_report_id: Mapped[int] = mapped_column(
-        ForeignKey("scheduled_reports.id"), index=True
+    scheduled_report_id: Mapped[int | None] = mapped_column(
+        ForeignKey("scheduled_reports.id"), nullable=True, index=True
     )
     ran_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     result_count: Mapped[int] = mapped_column(Integer, default=0)
