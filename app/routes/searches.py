@@ -199,7 +199,7 @@ def schedule_report(
     sched = ScheduledReport(
         saved_search_id=saved.id,
         frequency=req.frequency,
-        email=req.email,
+        email=user.email,
     )
     db.add(sched)
     db.commit()
