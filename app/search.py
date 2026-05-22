@@ -190,7 +190,14 @@ def execute_search(
     canon_json = json.dumps(filter_dict, sort_keys=True, default=str)
 
     if use_cache:
-        key = _cache_key(canon_json)
+        # Scope identity must be part of the key: two customers with the same
+        # filter must not share a cache slot. Agents and admin paths (scope=None)
+        # see the global view and share a single "global" slot.
+        if scope is not None and scope.role == Role.customer:
+            scope_tag = f"customer:{scope.id}"
+        else:
+            scope_tag = "global"
+        key = _cache_key(canon_json + "|" + scope_tag)
         now = time.time()
         hit = _cache.get(key)
         if hit is not None:
@@ -201,7 +208,7 @@ def execute_search(
     rows = [_ticket_to_dict(t) for t in db.scalars(_build_query(filter_dict, scope)).all()]
 
     if use_cache:
-        _cache[_cache_key(canon_json)] = (time.time(), rows)
+        _cache[key] = (time.time(), rows)
     return rows
 
 
