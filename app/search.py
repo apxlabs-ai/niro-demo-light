@@ -156,16 +156,20 @@ def _ticket_to_dict(t: Ticket) -> dict[str, Any]:
 # --- Result cache + executor -----------------------------------------
 
 
-def _cache_key(filter_json: str) -> str:
-    """Stable cache key derived from the filter JSON.
+def _cache_key(filter_json: str, scope: "User | None") -> str:
+    """Stable cache key derived from filter JSON + caller scope.
 
-    The filter JSON is already canonicalized by `serialize_filter`
-    (sorted keys, normalized values), so two logically-identical
-    filters produce the same key — and therefore hit the same cache
-    entry. That's the win: a popular saved search ({status: open}) only
-    pays the SQL cost once per TTL window across the whole process.
+    The scope must be part of the key so that two users running the
+    same filter get separate cache entries — otherwise Customer A's
+    scoped rows would be returned to Customer B.
     """
-    return hashlib.sha256(filter_json.encode()).hexdigest()
+    if scope is None:
+        scope_tag = "global"
+    elif scope.role == Role.customer:
+        scope_tag = f"user:{scope.id}"
+    else:
+        scope_tag = "agent"
+    return hashlib.sha256(f"{scope_tag}:{filter_json}".encode()).hexdigest()
 
 
 def execute_search(
@@ -190,7 +194,7 @@ def execute_search(
     canon_json = json.dumps(filter_dict, sort_keys=True, default=str)
 
     if use_cache:
-        key = _cache_key(canon_json)
+        key = _cache_key(canon_json, scope)
         now = time.time()
         hit = _cache.get(key)
         if hit is not None:
@@ -201,7 +205,7 @@ def execute_search(
     rows = [_ticket_to_dict(t) for t in db.scalars(_build_query(filter_dict, scope)).all()]
 
     if use_cache:
-        _cache[_cache_key(canon_json)] = (time.time(), rows)
+        _cache[_cache_key(canon_json, scope)] = (time.time(), rows)
     return rows
 
 

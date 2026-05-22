@@ -53,13 +53,24 @@ router = APIRouter(prefix="/searches", tags=["searches"])
 def _load_search_for_owner(
     search_id: int, user: User, db: Session
 ) -> SavedSearch:
-    """Load a saved search, returning 404 / 403 with the same semantics
-    as the rest of the API. Agents may read any search (for analytics);
-    customers may only touch their own."""
+    """Read path — agents bypass owner check for analytics.
+    Use _load_search_for_write for mutating routes."""
     saved = db.get(SavedSearch, search_id)
     if saved is None:
         raise HTTPException(status_code=404, detail="saved search not found")
     if user.role != Role.agent and saved.owner_id != user.id:
+        raise HTTPException(status_code=403, detail="forbidden")
+    return saved
+
+
+def _load_search_for_write(
+    search_id: int, user: User, db: Session
+) -> SavedSearch:
+    """Write path — only the owning user may mutate, regardless of role."""
+    saved = db.get(SavedSearch, search_id)
+    if saved is None:
+        raise HTTPException(status_code=404, detail="saved search not found")
+    if saved.owner_id != user.id:
         raise HTTPException(status_code=403, detail="forbidden")
     return saved
 
@@ -132,7 +143,7 @@ def update_search(
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ):
-    saved = _load_search_for_owner(search_id, user, db)
+    saved = _load_search_for_write(search_id, user, db)
     if req.name is not None:
         saved.name = req.name
     if req.filter is not None:
@@ -150,7 +161,7 @@ def delete_search(
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ):
-    saved = _load_search_for_owner(search_id, user, db)
+    saved = _load_search_for_write(search_id, user, db)
     db.delete(saved)
     db.commit()
 
@@ -194,7 +205,13 @@ def schedule_report(
     initial run immediately so the caller sees what the first emailed
     report would look like — this also surfaces filter errors at create
     time rather than at the next worker tick."""
-    saved = _load_search_for_owner(search_id, user, db)
+    saved = _load_search_for_write(search_id, user, db)
+
+    if req.email.lower() != user.email.lower():
+        raise HTTPException(
+            status_code=403,
+            detail="scheduled report email must match your account email",
+        )
 
     sched = ScheduledReport(
         saved_search_id=saved.id,
