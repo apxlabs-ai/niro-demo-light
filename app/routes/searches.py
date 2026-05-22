@@ -78,17 +78,30 @@ def _load_search_for_write(
 def _load_schedule_for_owner(
     schedule_id: int, user: User, db: Session
 ) -> ScheduledReport:
-    """Same idea, for ScheduledReport rows. The owner is identified
-    indirectly: ScheduledReport.saved_search_id → SavedSearch.owner_id."""
+    """Read path — agents bypass owner check for analytics.
+    Use _load_schedule_for_write for mutating routes."""
     sched = db.get(ScheduledReport, schedule_id)
     if sched is None:
         raise HTTPException(status_code=404, detail="schedule not found")
     saved = db.get(SavedSearch, sched.saved_search_id)
     if saved is None:
-        # Orphan schedule — shouldn't happen given the cascade rule,
-        # but treat as not-found for the caller.
         raise HTTPException(status_code=404, detail="schedule not found")
     if user.role != Role.agent and saved.owner_id != user.id:
+        raise HTTPException(status_code=403, detail="forbidden")
+    return sched
+
+
+def _load_schedule_for_write(
+    schedule_id: int, user: User, db: Session
+) -> ScheduledReport:
+    """Write path — only the owning user may mutate, regardless of role."""
+    sched = db.get(ScheduledReport, schedule_id)
+    if sched is None:
+        raise HTTPException(status_code=404, detail="schedule not found")
+    saved = db.get(SavedSearch, sched.saved_search_id)
+    if saved is None:
+        raise HTTPException(status_code=404, detail="schedule not found")
+    if saved.owner_id != user.id:
         raise HTTPException(status_code=403, detail="forbidden")
     return sched
 
@@ -265,7 +278,7 @@ def disable_schedule(
 ):
     """Disable + delete a schedule. We hard-delete here (the ReportRun
     history is preserved via SET NULL'ed FK on the runs table)."""
-    sched = _load_schedule_for_owner(schedule_id, user, db)
+    sched = _load_schedule_for_write(schedule_id, user, db)
     db.delete(sched)
     db.commit()
 

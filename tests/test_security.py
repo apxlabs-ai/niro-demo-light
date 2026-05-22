@@ -151,6 +151,35 @@ def test_TC_C90B9439_agent_cannot_delete_customer_search(
 
 
 # ---------------------------------------------------------------------------
+# TC-29859CF0 — MEDIUM: agent can delete a customer's scheduled report
+# ---------------------------------------------------------------------------
+
+def test_TC_29859CF0_agent_cannot_delete_customer_schedule(
+    client, db_session, customer_a, token_a, token_agent
+):
+    """Agent must receive 403 when DELETing a customer-owned scheduled report."""
+    make_ticket(db_session, customer_a, subject="A-ticket")
+    search = make_search(client, token_a, name="my-search")
+    r = client.post(
+        f"/searches/{search['id']}/schedule",
+        json={"frequency": "daily", "email": customer_a.email},
+        headers=auth(token_a),
+    )
+    assert r.status_code == 201
+    schedule_id = r.json()["schedule"]["id"]
+
+    r = client.delete(f"/searches/schedules/{schedule_id}", headers=auth(token_agent))
+    assert r.status_code == 403, (
+        f"Expected 403 but got {r.status_code}: agent silently deleted customer schedule"
+    )
+
+    # Confirm schedule still exists for the owner
+    r = client.get(f"/searches/{search['id']}/schedule", headers=auth(token_a))
+    assert r.status_code == 200
+    assert any(s["id"] == schedule_id for s in r.json())
+
+
+# ---------------------------------------------------------------------------
 # TC-77822689 — MEDIUM: arbitrary email accepted for scheduled reports
 # ---------------------------------------------------------------------------
 
