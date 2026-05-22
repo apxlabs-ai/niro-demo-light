@@ -121,7 +121,6 @@ class SearchResultsOut(BaseModel):
 
 class ScheduleReportCreate(BaseModel):
     frequency: ReportFrequency = ReportFrequency.daily
-    email: EmailStr
 
 
 class ScheduledReportOut(BaseModel):
@@ -130,7 +129,7 @@ class ScheduledReportOut(BaseModel):
     id: int
     saved_search_id: int
     frequency: ReportFrequency
-    email: EmailStr
+    email: str
     enabled: bool
     next_run_at: datetime
     last_run_at: datetime | None
