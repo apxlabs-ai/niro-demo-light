@@ -3,6 +3,7 @@ import os
 import tempfile
 import unittest
 
+from fastapi import HTTPException
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -18,8 +19,8 @@ from app.models import (
     Ticket,
     User,
 )
-from app.routes.searches import schedule_report
-from app.schemas import ScheduleReportCreate
+from app.routes.searches import disable_schedule, schedule_report, update_search
+from app.schemas import SavedSearchUpdate, ScheduleReportCreate
 from app.search import execute_search, invalidate_cache, serialize_filter
 
 
@@ -123,32 +124,76 @@ class SavedSearchSecurityTests(unittest.TestCase):
         self.assertEqual(run.result_count, 1)
         self.assertEqual(json.loads(run.result_ticket_ids_json), [ticket_a.id])
 
-    def test_agent_schedule_response_uses_saved_search_owner_scope(self):
-        marker = "agent-inline-scope-marker"
-        ticket_a = self._ticket(self.customer_a, marker)
-        self._ticket(self.customer_b, marker)
-
+    def test_agent_cannot_modify_customer_saved_search(self):
         saved = SavedSearch(
             owner_id=self.customer_a.id,
-            name="Customer A schedule via agent",
-            filter_json=serialize_filter({"subject_contains": marker}),
+            name="Customer A search",
+            filter_json=serialize_filter({}),
         )
         self.db.add(saved)
         self.db.commit()
         self.db.refresh(saved)
 
-        response = schedule_report(
-            saved.id,
-            ScheduleReportCreate(
-                frequency=ReportFrequency.daily,
-                email="reports@example.com",
-            ),
-            user=self.agent,
-            db=self.db,
-        )
+        with self.assertRaises(HTTPException) as err:
+            update_search(
+                saved.id,
+                SavedSearchUpdate(name="agent changed this"),
+                user=self.agent,
+                db=self.db,
+            )
 
-        self.assertEqual(response.initial_run.result_count, 1)
-        self.assertEqual([ticket.id for ticket in response.initial_results], [ticket_a.id])
+        self.assertEqual(err.exception.status_code, 403)
+        self.db.refresh(saved)
+        self.assertEqual(saved.name, "Customer A search")
+
+    def test_agent_cannot_create_schedule_for_customer_saved_search(self):
+        saved = SavedSearch(
+            owner_id=self.customer_a.id,
+            name="Customer A schedule target",
+            filter_json=serialize_filter({}),
+        )
+        self.db.add(saved)
+        self.db.commit()
+        self.db.refresh(saved)
+
+        with self.assertRaises(HTTPException) as err:
+            schedule_report(
+                saved.id,
+                ScheduleReportCreate(
+                    frequency=ReportFrequency.daily,
+                    email="agent-controlled@example.com",
+                ),
+                user=self.agent,
+                db=self.db,
+            )
+
+        self.assertEqual(err.exception.status_code, 403)
+        self.assertEqual(self.db.query(ScheduledReport).count(), 0)
+
+    def test_agent_cannot_delete_customer_schedule(self):
+        saved = SavedSearch(
+            owner_id=self.customer_a.id,
+            name="Customer A schedule",
+            filter_json=serialize_filter({}),
+        )
+        self.db.add(saved)
+        self.db.commit()
+        self.db.refresh(saved)
+
+        schedule = ScheduledReport(
+            saved_search_id=saved.id,
+            frequency=ReportFrequency.daily,
+            email="customer@example.com",
+        )
+        self.db.add(schedule)
+        self.db.commit()
+        self.db.refresh(schedule)
+
+        with self.assertRaises(HTTPException) as err:
+            disable_schedule(schedule.id, user=self.agent, db=self.db)
+
+        self.assertEqual(err.exception.status_code, 403)
+        self.assertIsNotNone(self.db.get(ScheduledReport, schedule.id))
 
 
 if __name__ == "__main__":
