@@ -26,12 +26,11 @@
 # ---------------------------------------------------------------------
 # Reachability
 # ---------------------------------------------------------------------
-# Every target must be reachable from inside the niro container — niro
-# does not bridge networks for you. `localhost` and `127.0.0.1` here
-# mean the container's loopback, not your host's, so an app on your
-# host's loopback is not reachable that way. On Docker Desktop
-# (macOS/Windows), use `host.docker.internal:<port>` instead. Verify
-# any target before listing it:
+# Every target must be reachable from inside the niro container.
+# `localhost` and `127.0.0.1` mean your HOST machine's loopback —
+# niro auto-translates these so services bound to your host (a dev
+# server, a local Postgres, etc.) are reachable from the container.
+# Verify any target before listing it:
 #
 #   docker run --rm curlimages/curl -v <host:port>
 #
@@ -67,4 +66,4 @@
 #   - target: "10.0.42.0/24:443"
 
 targets:
-  - target: "host.docker.internal:8000"
+  - target: "localhost:8000"
