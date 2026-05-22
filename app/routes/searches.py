@@ -195,6 +195,9 @@ def schedule_report(
     report would look like — this also surfaces filter errors at create
     time rather than at the next worker tick."""
     saved = _load_search_for_owner(search_id, user, db)
+    owner = db.get(User, saved.owner_id)
+    if owner is None:
+        raise HTTPException(status_code=404, detail="saved search owner not found")
 
     sched = ScheduledReport(
         saved_search_id=saved.id,
@@ -217,7 +220,7 @@ def schedule_report(
     # executor so the response carries TicketOut rows rather than the
     # truncated id list stored on the ReportRun audit row.
     try:
-        rows = execute_search(saved.filter_json, db, scope=user)
+        rows = execute_search(saved.filter_json, db, scope=owner)
     except FilterError:
         rows = []
     return ScheduleCreateResponse(

@@ -18,6 +18,8 @@ from app.models import (
     Ticket,
     User,
 )
+from app.routes.searches import schedule_report
+from app.schemas import ScheduleReportCreate
 from app.search import execute_search, invalidate_cache, serialize_filter
 
 
@@ -49,7 +51,13 @@ class SavedSearchSecurityTests(unittest.TestCase):
             full_name="Customer B",
             role=Role.customer,
         )
-        self.db.add_all([self.customer_a, self.customer_b])
+        self.agent = User(
+            email="agent@example.test",
+            password_hash=hash_password("password-agent"),
+            full_name="Agent",
+            role=Role.agent,
+        )
+        self.db.add_all([self.customer_a, self.customer_b, self.agent])
         self.db.commit()
         self.db.refresh(self.customer_a)
         self.db.refresh(self.customer_b)
@@ -114,6 +122,33 @@ class SavedSearchSecurityTests(unittest.TestCase):
         self.assertTrue(run.success)
         self.assertEqual(run.result_count, 1)
         self.assertEqual(json.loads(run.result_ticket_ids_json), [ticket_a.id])
+
+    def test_agent_schedule_response_uses_saved_search_owner_scope(self):
+        marker = "agent-inline-scope-marker"
+        ticket_a = self._ticket(self.customer_a, marker)
+        self._ticket(self.customer_b, marker)
+
+        saved = SavedSearch(
+            owner_id=self.customer_a.id,
+            name="Customer A schedule via agent",
+            filter_json=serialize_filter({"subject_contains": marker}),
+        )
+        self.db.add(saved)
+        self.db.commit()
+        self.db.refresh(saved)
+
+        response = schedule_report(
+            saved.id,
+            ScheduleReportCreate(
+                frequency=ReportFrequency.daily,
+                email="reports@example.com",
+            ),
+            user=self.agent,
+            db=self.db,
+        )
+
+        self.assertEqual(response.initial_run.result_count, 1)
+        self.assertEqual([ticket.id for ticket in response.initial_results], [ticket_a.id])
 
 
 if __name__ == "__main__":
