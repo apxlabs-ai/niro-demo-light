@@ -10,7 +10,11 @@ from sqlalchemy.orm import Session
 from .db import get_db
 from .models import Role, User
 
-SECRET_KEY = os.environ.get("HELPDESK_SECRET", "dev-secret-do-not-use-in-prod")
+SECRET_KEY = os.environ.get("HELPDESK_SECRET")
+if not SECRET_KEY:
+    raise RuntimeError("HELPDESK_SECRET must be set")
+if len(SECRET_KEY.encode("utf-8")) < 32:
+    raise RuntimeError("HELPDESK_SECRET must be at least 32 bytes")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_TTL_MINUTES = 60 * 24
 

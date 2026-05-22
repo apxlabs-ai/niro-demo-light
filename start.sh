@@ -7,6 +7,7 @@ if [ ! -d .venv ]; then
 fi
 . .venv/bin/activate
 pip install -q -r requirements.txt
+export HELPDESK_SECRET="${HELPDESK_SECRET:-dev-helpdesk-secret-0000000000000000}"
 python seed.py
 
 # Background uvicorn, fully decoupled from the parent shell so the
