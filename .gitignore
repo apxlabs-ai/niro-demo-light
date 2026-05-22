@@ -6,3 +6,5 @@ __pycache__/
 .env
 .DS_Store
 niro/credentials.yaml
+helpdesk.log
+helpdesk.err.log

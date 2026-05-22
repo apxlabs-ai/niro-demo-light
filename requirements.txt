@@ -1,5 +1,6 @@
 fastapi>=0.110
-uvicorn[standard]>=0.27
+uvicorn[standard]>=0.27; platform_system != "Windows"
+uvicorn>=0.27; platform_system == "Windows"
 sqlalchemy>=2.0
 pydantic[email]>=2.6
 bcrypt>=4.1

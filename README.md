@@ -10,12 +10,13 @@ tree; `./feature/cleanup.sh` closes any open PRs the run produced.
 ## Run locally
 
 ```
-./start.sh
+./start.sh           # macOS / Linux
+.\start.ps1          # Windows (PowerShell)
 ```
 
 Server starts on `http://127.0.0.1:8000` and prints `→ helpdesk ready on
 http://127.0.0.1:8000` once `/health` responds. Interactive docs at `/docs`.
-Stop with `./stop.sh`.
+Stop with `./stop.sh` (or `.\stop.ps1` on Windows).
 
 ### Seeded users
 
