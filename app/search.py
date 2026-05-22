@@ -156,16 +156,15 @@ def _ticket_to_dict(t: Ticket) -> dict[str, Any]:
 # --- Result cache + executor -----------------------------------------
 
 
-def _cache_key(filter_json: str) -> str:
-    """Stable cache key derived from the filter JSON.
+def _cache_key(filter_json: str, scope_id: int | None) -> str:
+    """Cache key encodes both the filter and the requesting user's scope.
 
-    The filter JSON is already canonicalized by `serialize_filter`
-    (sorted keys, normalized values), so two logically-identical
-    filters produce the same key — and therefore hit the same cache
-    entry. That's the win: a popular saved search ({status: open}) only
-    pays the SQL cost once per TTL window across the whole process.
+    scope_id=None means the global/admin view (no customer restriction).
+    Two users with the same filter but different scope_ids get independent
+    cache entries so A's results are never returned to B.
     """
-    return hashlib.sha256(filter_json.encode()).hexdigest()
+    payload = f"{scope_id}:{filter_json}"
+    return hashlib.sha256(payload.encode()).hexdigest()
 
 
 def execute_search(
@@ -189,8 +188,12 @@ def execute_search(
     filter_dict = normalize_filter(json.loads(filter_json) if filter_json else {})
     canon_json = json.dumps(filter_dict, sort_keys=True, default=str)
 
+    # Scope identity for the cache key: only customer-scoped calls are restricted;
+    # agent/None callers share the global cache entry (scope_id=None).
+    scope_id = scope.id if (scope is not None and scope.role == Role.customer) else None
+
     if use_cache:
-        key = _cache_key(canon_json)
+        key = _cache_key(canon_json, scope_id)
         now = time.time()
         hit = _cache.get(key)
         if hit is not None:
@@ -201,7 +204,7 @@ def execute_search(
     rows = [_ticket_to_dict(t) for t in db.scalars(_build_query(filter_dict, scope)).all()]
 
     if use_cache:
-        _cache[_cache_key(canon_json)] = (time.time(), rows)
+        _cache[_cache_key(canon_json, scope_id)] = (time.time(), rows)
     return rows
 
 
