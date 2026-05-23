@@ -196,6 +196,12 @@ def schedule_report(
     time rather than at the next worker tick."""
     saved = _load_search_for_owner(search_id, user, db)
 
+    if req.email != user.email:
+        raise HTTPException(
+            status_code=422,
+            detail="email must match your account email address",
+        )
+
     sched = ScheduledReport(
         saved_search_id=saved.id,
         frequency=req.frequency,
