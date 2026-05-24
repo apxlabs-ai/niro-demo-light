@@ -66,4 +66,4 @@
 #   - target: "10.0.42.0/24:443"
 
 targets:
-  - target: "localhost:8000"
+  - target: "host.docker.internal:8000"
