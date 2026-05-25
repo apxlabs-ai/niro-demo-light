@@ -14,8 +14,8 @@ from app.models import (
     User,
     Role,
 )
-from app.routes.searches import delete_search, update_search
-from app.schemas import SavedSearchUpdate
+from app.routes.searches import delete_search, disable_schedule, schedule_report, update_search
+from app.schemas import SavedSearchUpdate, ScheduleReportCreate
 from app.search import execute_search, invalidate_cache, serialize_filter
 
 
@@ -114,4 +114,35 @@ class SavedSearchSecurityTests(unittest.TestCase):
 
         with self.assertRaises(HTTPException) as delete_error:
             delete_search(saved.id, user=agent, db=self.db)
+        self.assertEqual(403, delete_error.exception.status_code)
+
+    def test_agents_cannot_create_customer_saved_search_schedules(self):
+        customer = self._user()
+        agent = self._user(Role.agent)
+        saved = self._saved_search(customer, {})
+
+        with self.assertRaises(HTTPException) as schedule_error:
+            schedule_report(
+                saved.id,
+                ScheduleReportCreate(email="attacker@example.com"),
+                user=agent,
+                db=self.db,
+            )
+        self.assertEqual(403, schedule_error.exception.status_code)
+
+    def test_agents_cannot_delete_customer_saved_search_schedules(self):
+        customer = self._user()
+        agent = self._user(Role.agent)
+        saved = self._saved_search(customer, {})
+        report = ScheduledReport(
+            saved_search_id=saved.id,
+            frequency=ReportFrequency.daily,
+            email="owner@example.test",
+        )
+        self.db.add(report)
+        self.db.commit()
+        self.db.refresh(report)
+
+        with self.assertRaises(HTTPException) as delete_error:
+            disable_schedule(report.id, user=agent, db=self.db)
         self.assertEqual(403, delete_error.exception.status_code)
