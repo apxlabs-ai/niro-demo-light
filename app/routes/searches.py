@@ -64,6 +64,20 @@ def _load_search_for_owner(
     return saved
 
 
+def _load_search_for_mutation(
+    search_id: int, user: User, db: Session
+) -> SavedSearch:
+    """Load a saved search for write operations. Agents can read
+    customer searches for analytics, but only the owner can mutate or
+    delete a saved search."""
+    saved = db.get(SavedSearch, search_id)
+    if saved is None:
+        raise HTTPException(status_code=404, detail="saved search not found")
+    if saved.owner_id != user.id:
+        raise HTTPException(status_code=403, detail="forbidden")
+    return saved
+
+
 def _load_schedule_for_owner(
     schedule_id: int, user: User, db: Session
 ) -> ScheduledReport:
@@ -132,7 +146,7 @@ def update_search(
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ):
-    saved = _load_search_for_owner(search_id, user, db)
+    saved = _load_search_for_mutation(search_id, user, db)
     if req.name is not None:
         saved.name = req.name
     if req.filter is not None:
@@ -150,7 +164,7 @@ def delete_search(
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ):
-    saved = _load_search_for_owner(search_id, user, db)
+    saved = _load_search_for_mutation(search_id, user, db)
     db.delete(saved)
     db.commit()
 
