@@ -14,7 +14,14 @@ from app.models import (
     User,
     Role,
 )
-from app.routes.searches import delete_search, disable_schedule, schedule_report, update_search
+from app.routes.searches import (
+    delete_search,
+    disable_schedule,
+    list_runs,
+    list_schedules,
+    schedule_report,
+    update_search,
+)
 from app.schemas import SavedSearchUpdate, ScheduleReportCreate
 from app.search import execute_search, invalidate_cache, serialize_filter
 
@@ -146,3 +153,37 @@ class SavedSearchSecurityTests(unittest.TestCase):
         with self.assertRaises(HTTPException) as delete_error:
             disable_schedule(report.id, user=agent, db=self.db)
         self.assertEqual(403, delete_error.exception.status_code)
+
+    def test_agents_cannot_list_customer_saved_search_schedules(self):
+        customer = self._user()
+        agent = self._user(Role.agent)
+        saved = self._saved_search(customer, {})
+        report = ScheduledReport(
+            saved_search_id=saved.id,
+            frequency=ReportFrequency.daily,
+            email="owner@example.test",
+        )
+        self.db.add(report)
+        self.db.commit()
+        self.db.refresh(report)
+
+        with self.assertRaises(HTTPException) as list_error:
+            list_schedules(saved.id, user=agent, db=self.db)
+        self.assertEqual(403, list_error.exception.status_code)
+
+    def test_agents_cannot_list_customer_saved_search_schedule_runs(self):
+        customer = self._user()
+        agent = self._user(Role.agent)
+        saved = self._saved_search(customer, {})
+        report = ScheduledReport(
+            saved_search_id=saved.id,
+            frequency=ReportFrequency.daily,
+            email="owner@example.test",
+        )
+        self.db.add(report)
+        self.db.commit()
+        self.db.refresh(report)
+
+        with self.assertRaises(HTTPException) as list_error:
+            list_runs(report.id, user=agent, db=self.db)
+        self.assertEqual(403, list_error.exception.status_code)
