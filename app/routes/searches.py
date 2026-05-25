@@ -139,7 +139,7 @@ def list_searches(
     return list(db.scalars(q).all())
 
 
-@router.get("/{search_id}", response_model=SavedSearchOut)
+@router.get("/{search_id:int}", response_model=SavedSearchOut)
 def get_search(
     search_id: int,
     user: User = Depends(current_user),
@@ -148,7 +148,7 @@ def get_search(
     return _load_search_for_owner(search_id, user, db)
 
 
-@router.patch("/{search_id}", response_model=SavedSearchOut)
+@router.patch("/{search_id:int}", response_model=SavedSearchOut)
 def update_search(
     search_id: int,
     req: SavedSearchUpdate,
@@ -167,7 +167,7 @@ def update_search(
     return saved
 
 
-@router.delete("/{search_id}", status_code=204)
+@router.delete("/{search_id:int}", status_code=204)
 def delete_search(
     search_id: int,
     user: User = Depends(current_user),
@@ -181,7 +181,7 @@ def delete_search(
 # --- Run a search on demand ------------------------------------------
 
 
-@router.get("/{search_id}/run", response_model=SearchResultsOut)
+@router.get("/{search_id:int}/run", response_model=SearchResultsOut)
 def run_search(
     search_id: int,
     user: User = Depends(current_user),
@@ -203,7 +203,7 @@ def run_search(
 
 
 @router.post(
-    "/{search_id}/schedule",
+    "/{search_id:int}/schedule",
     response_model=ScheduleCreateResponse,
     status_code=201,
 )
@@ -250,7 +250,7 @@ def schedule_report(
     )
 
 
-@router.get("/{search_id}/schedule", response_model=list[ScheduledReportOut])
+@router.get("/{search_id:int}/schedule", response_model=list[ScheduledReportOut])
 def list_schedules(
     search_id: int,
     user: User = Depends(current_user),
