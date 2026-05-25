@@ -19,8 +19,8 @@ from app.models import (
     Ticket,
     User,
 )
-from app.routes.searches import disable_schedule, schedule_report
-from app.schemas import SavedSearchCreate, ScheduleReportCreate
+from app.routes.searches import delete_search, disable_schedule, schedule_report, update_search
+from app.schemas import SavedSearchCreate, SavedSearchUpdate, ScheduleReportCreate
 from app.search import serialize_filter
 
 
@@ -113,6 +113,28 @@ class SavedSearchSecurityTests(unittest.TestCase):
 
         self.assertFalse(self.db.get(ScheduledReport, schedule.id).enabled)
         self.assertIsNotNone(self.db.get(ReportRun, run.id))
+
+    def test_saved_search_delete_preserves_run_history(self):
+        saved = self._saved_search(self.customer)
+        schedule, run = self._schedule_with_run(saved)
+
+        delete_search(saved.id, self.customer, self.db)
+
+        self.assertIsNotNone(self.db.get(SavedSearch, saved.id))
+        self.assertFalse(self.db.get(ScheduledReport, schedule.id).enabled)
+        self.assertIsNotNone(self.db.get(ReportRun, run.id))
+
+    def test_owner_can_update_saved_search_name(self):
+        saved = self._saved_search(self.customer)
+
+        updated = update_search(
+            saved.id,
+            SavedSearchUpdate(name="renamed by owner"),
+            self.customer,
+            self.db,
+        )
+
+        self.assertEqual(updated.name, "renamed by owner")
 
     def test_agent_cannot_delete_customer_schedule(self):
         saved = self._saved_search(self.customer)

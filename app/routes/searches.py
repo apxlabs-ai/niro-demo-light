@@ -162,7 +162,6 @@ def update_search(
     db: Session = Depends(get_db),
 ):
     saved = _load_search_for_owner(search_id, user, db, allow_agent=False)
-    _validate_report_recipient(str(req.email), user)
     if req.name is not None:
         saved.name = req.name
     if req.filter is not None:
@@ -181,7 +180,11 @@ def delete_search(
     db: Session = Depends(get_db),
 ):
     saved = _load_search_for_owner(search_id, user, db, allow_agent=False)
-    db.delete(saved)
+    schedules = db.scalars(
+        select(ScheduledReport).where(ScheduledReport.saved_search_id == saved.id)
+    ).all()
+    for sched in schedules:
+        sched.enabled = False
     db.commit()
 
 
