@@ -19,7 +19,13 @@ from app.models import (
     Ticket,
     User,
 )
-from app.routes.searches import delete_search, disable_schedule, schedule_report, update_search
+from app.routes.searches import (
+    delete_search,
+    disable_schedule,
+    get_search,
+    schedule_report,
+    update_search,
+)
 from app.schemas import SavedSearchCreate, SavedSearchUpdate, ScheduleReportCreate
 from app.search import serialize_filter
 
@@ -40,13 +46,13 @@ class SavedSearchSecurityTests(unittest.TestCase):
         self.db = Session()
 
         self.customer = User(
-            email="alex@customer.test",
+            email="alex@example.com",
             password_hash=hash_password("customer-pass-1234"),
             full_name="Customer A",
             role=Role.customer,
         )
         self.agent = User(
-            email="agent@helpdesk.test",
+            email="agent@example.com",
             password_hash=hash_password("agent-pass-1234"),
             full_name="Agent",
             role=Role.agent,
@@ -123,6 +129,20 @@ class SavedSearchSecurityTests(unittest.TestCase):
         self.assertIsNotNone(self.db.get(SavedSearch, saved.id))
         self.assertFalse(self.db.get(ScheduledReport, schedule.id).enabled)
         self.assertIsNotNone(self.db.get(ReportRun, run.id))
+        with self.assertRaises(HTTPException) as get_err:
+            get_search(saved.id, self.customer, self.db)
+        self.assertEqual(get_err.exception.status_code, 404)
+        with self.assertRaises(HTTPException) as schedule_err:
+            schedule_report(
+                saved.id,
+                ScheduleReportCreate(
+                    frequency=ReportFrequency.weekly,
+                    email=self.customer.email,
+                ),
+                self.customer,
+                self.db,
+            )
+        self.assertEqual(schedule_err.exception.status_code, 404)
 
     def test_owner_can_update_saved_search_name(self):
         saved = self._saved_search(self.customer)

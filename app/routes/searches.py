@@ -46,6 +46,8 @@ from ..search import (
 
 router = APIRouter(prefix="/searches", tags=["searches"])
 
+DELETED_FILTER_JSON = "__deleted__"
+
 
 # --- Helpers ----------------------------------------------------------
 
@@ -57,7 +59,7 @@ def _load_search_for_owner(
     as the rest of the API. Agents may read any search (for analytics);
     customers may only touch their own."""
     saved = db.get(SavedSearch, search_id)
-    if saved is None:
+    if saved is None or saved.filter_json == DELETED_FILTER_JSON:
         raise HTTPException(status_code=404, detail="saved search not found")
     if saved.owner_id != user.id and not (allow_agent and user.role == Role.agent):
         raise HTTPException(status_code=403, detail="forbidden")
@@ -118,6 +120,8 @@ def list_searches(
 ):
     q = select(SavedSearch).order_by(
         SavedSearch.pinned.desc(), SavedSearch.created_at.desc()
+    ).where(
+        SavedSearch.filter_json != DELETED_FILTER_JSON
     )
     if user.role == Role.customer:
         q = q.where(SavedSearch.owner_id == user.id)
@@ -132,11 +136,18 @@ def search_stats(
     """Operator view: search-count totals + cache occupancy + the top
     pinned filters across all customers. Agent role required because
     this aggregates across tenants for capacity planning."""
-    total = db.scalar(select(func.count()).select_from(SavedSearch))
+    total = db.scalar(
+        select(func.count())
+        .select_from(SavedSearch)
+        .where(SavedSearch.filter_json != DELETED_FILTER_JSON)
+    )
     pinned = db.scalar(
         select(func.count())
         .select_from(SavedSearch)
-        .where(SavedSearch.pinned.is_(True))
+        .where(
+            SavedSearch.pinned.is_(True),
+            SavedSearch.filter_json != DELETED_FILTER_JSON,
+        )
     )
     return {
         "total_saved_searches": int(total or 0),
@@ -185,6 +196,8 @@ def delete_search(
     ).all()
     for sched in schedules:
         sched.enabled = False
+    saved.filter_json = DELETED_FILTER_JSON
+    saved.pinned = False
     db.commit()
 
 
