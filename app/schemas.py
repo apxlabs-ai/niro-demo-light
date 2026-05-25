@@ -81,6 +81,8 @@ class SearchFilter(BaseModel):
     bad enum values surface as 422 from the API layer rather than as a
     SQLAlchemy error deep in the executor."""
 
+    model_config = ConfigDict(extra="forbid")
+
     status: Status | None = None
     priority: Priority | None = None
     assignee_id: int | None = Field(default=None, ge=0)

@@ -65,7 +65,7 @@ def _load_search_for_owner(
 
 
 def _load_schedule_for_owner(
-    schedule_id: int, user: User, db: Session
+    schedule_id: int, user: User, db: Session, *, allow_agent: bool = True
 ) -> ScheduledReport:
     """Same idea, for ScheduledReport rows. The owner is identified
     indirectly: ScheduledReport.saved_search_id → SavedSearch.owner_id."""
@@ -77,9 +77,17 @@ def _load_schedule_for_owner(
         # Orphan schedule — shouldn't happen given the cascade rule,
         # but treat as not-found for the caller.
         raise HTTPException(status_code=404, detail="schedule not found")
-    if user.role != Role.agent and saved.owner_id != user.id:
+    if saved.owner_id != user.id and not (allow_agent and user.role == Role.agent):
         raise HTTPException(status_code=403, detail="forbidden")
     return sched
+
+
+def _validate_report_recipient(email: str, owner: User) -> None:
+    if email.lower() != owner.email.lower():
+        raise HTTPException(
+            status_code=422,
+            detail="scheduled report recipient must match the saved-search owner",
+        )
 
 
 # --- CRUD on saved searches ------------------------------------------
@@ -154,6 +162,7 @@ def update_search(
     db: Session = Depends(get_db),
 ):
     saved = _load_search_for_owner(search_id, user, db, allow_agent=False)
+    _validate_report_recipient(str(req.email), user)
     if req.name is not None:
         saved.name = req.name
     if req.filter is not None:
@@ -216,6 +225,7 @@ def schedule_report(
     report would look like — this also surfaces filter errors at create
     time rather than at the next worker tick."""
     saved = _load_search_for_owner(search_id, user, db, allow_agent=False)
+    _validate_report_recipient(str(req.email), user)
 
     sched = ScheduledReport(
         saved_search_id=saved.id,
@@ -254,9 +264,12 @@ def list_schedules(
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ):
-    saved = _load_search_for_owner(search_id, user, db)
+    saved = _load_search_for_owner(search_id, user, db, allow_agent=False)
     rows = db.scalars(
-        select(ScheduledReport).where(ScheduledReport.saved_search_id == saved.id)
+        select(ScheduledReport).where(
+            ScheduledReport.saved_search_id == saved.id,
+            ScheduledReport.enabled.is_(True),
+        )
     ).all()
     return list(rows)
 
@@ -267,10 +280,9 @@ def disable_schedule(
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ):
-    """Disable + delete a schedule. We hard-delete here (the ReportRun
-    history is preserved via SET NULL'ed FK on the runs table)."""
-    sched = _load_schedule_for_owner(schedule_id, user, db)
-    db.delete(sched)
+    """Disable a schedule while preserving its ReportRun audit history."""
+    sched = _load_schedule_for_owner(schedule_id, user, db, allow_agent=False)
+    sched.enabled = False
     db.commit()
 
 
@@ -285,7 +297,7 @@ def list_runs(
     """Read the run history for a schedule. Useful for spotting silent
     failures (success=False rows with error messages) without waiting
     for an out-of-band alert."""
-    sched = _load_schedule_for_owner(schedule_id, user, db)
+    sched = _load_schedule_for_owner(schedule_id, user, db, allow_agent=False)
     from ..models import ReportRun
 
     rows = (

@@ -107,6 +107,20 @@ def run_scheduled_report(report_id: int, db: Session) -> ReportRun:
         db.refresh(run)
         return run
 
+    if report.email.lower() != owner.email.lower():
+        run = ReportRun(
+            scheduled_report_id=report.id,
+            ran_at=started,
+            success=False,
+            error="recipient is not the saved-search owner",
+        )
+        db.add(run)
+        report.next_run_at = _next_run_after(report.frequency, started)
+        report.last_run_at = started
+        db.commit()
+        db.refresh(run)
+        return run
+
     try:
         # The schedule has been validated end-to-end at create time
         # (ownership of the saved search was checked in the route
