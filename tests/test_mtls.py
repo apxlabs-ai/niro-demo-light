@@ -80,19 +80,19 @@ def db():
 def demo_users(db):
     """Seed two customers and one agent with one ticket each."""
     alex = User(
-        email="alex@customer.test",
+        email="alex@customer.example.com",
         full_name="Alex Customer",
         role=Role.customer,
         password_hash=hash_password("x"),
     )
     blair = User(
-        email="blair@customer.test",
+        email="blair@customer.example.com",
         full_name="Blair Customer",
         role=Role.customer,
         password_hash=hash_password("x"),
     )
     agent = User(
-        email="agent@helpdesk.test",
+        email="agent@helpdesk.example.com",
         full_name="Helpdesk Agent",
         role=Role.agent,
         password_hash=hash_password("x"),
@@ -172,12 +172,12 @@ def test_current_user_mtls_maps_cn_to_user(db, demo_users):
 
     alex, *_ = demo_users
     mock_req = MagicMock(spec=Request)
-    mock_req.scope = {"ssl_object": _make_ssl_object(cn="alex@customer.test")}
+    mock_req.scope = {"ssl_object": _make_ssl_object(cn="alex@customer.example.com")}
 
     user = current_user_mtls(request=mock_req, db=db)
 
     assert user.id == alex.id
-    assert user.email == "alex@customer.test"
+    assert user.email == "alex@customer.example.com"
 
 
 def test_current_user_mtls_raises_401_no_ssl_object(db, demo_users):
@@ -229,9 +229,9 @@ def test_current_user_mtls_raises_401_unknown_cn(db, demo_users):
 def test_mtls_me_with_valid_cert_returns_owner(client, demo_users):
     """AC-1: valid cert → 200 + the cert owner's user object."""
     alex, *_ = demo_users
-    resp = client.get("/mtls/me", headers={"X-Test-Cert-CN": "alex@customer.test"})
+    resp = client.get("/mtls/me", headers={"X-Test-Cert-CN": "alex@customer.example.com"})
     assert resp.status_code == 200
-    assert resp.json()["email"] == "alex@customer.test"
+    assert resp.json()["email"] == "alex@customer.example.com"
 
 
 def test_mtls_me_without_cert_returns_401(client, demo_users):
@@ -253,7 +253,7 @@ def test_mtls_me_unknown_cn_returns_401(client, demo_users):
 def test_mtls_tickets_returns_only_owner_tickets(client, demo_users):
     """AC-4: cert-authenticated list must be scoped to the cert owner."""
     alex, blair, _, ticket_alex, ticket_blair = demo_users
-    resp = client.get("/mtls/tickets", headers={"X-Test-Cert-CN": "alex@customer.test"})
+    resp = client.get("/mtls/tickets", headers={"X-Test-Cert-CN": "alex@customer.example.com"})
     assert resp.status_code == 200
     ids = {t["id"] for t in resp.json()}
     assert ticket_alex.id in ids, "alex's own ticket must appear"
@@ -275,7 +275,7 @@ def test_mtls_ticket_by_id_owner_can_access_own(client, demo_users):
     alex, _, _, ticket_alex, _ = demo_users
     resp = client.get(
         f"/mtls/tickets/{ticket_alex.id}",
-        headers={"X-Test-Cert-CN": "alex@customer.test"},
+        headers={"X-Test-Cert-CN": "alex@customer.example.com"},
     )
     assert resp.status_code == 200
     assert resp.json()["id"] == ticket_alex.id
@@ -299,7 +299,7 @@ def test_mtls_ticket_by_id_cross_user_returns_403(client, demo_users):
     _, _, _, _, ticket_blair = demo_users
     resp = client.get(
         f"/mtls/tickets/{ticket_blair.id}",
-        headers={"X-Test-Cert-CN": "alex@customer.test"},
+        headers={"X-Test-Cert-CN": "alex@customer.example.com"},
     )
     assert resp.status_code == 403, (
         "AC-BUG-1: cross-user ticket access must be 403. "

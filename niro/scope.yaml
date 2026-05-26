@@ -67,3 +67,4 @@
 
 targets:
   - target: "localhost:8000"
+  - target: "localhost:8443"
