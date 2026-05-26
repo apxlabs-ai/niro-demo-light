@@ -2,10 +2,10 @@
 from sqlalchemy import select
 
 from app.auth import hash_password
-from app.db import Base, SessionLocal, engine
+from app.db import SessionLocal, create_or_migrate_schema
 from app.models import Role, User
 
-Base.metadata.create_all(bind=engine)
+create_or_migrate_schema()
 
 SEED = [
     ("agent@helpdesk.test", "Alice Agent", Role.agent, "agent-pass-1234"),

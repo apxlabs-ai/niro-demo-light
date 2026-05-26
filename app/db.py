@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
 DB_URL = "sqlite:///./helpdesk.db"
@@ -17,3 +17,14 @@ def get_db():
         yield db
     finally:
         db.close()
+
+
+def create_or_migrate_schema():
+    Base.metadata.create_all(bind=engine)
+    inspector = inspect(engine)
+    if "saved_searches" not in inspector.get_table_names():
+        return
+    columns = {column["name"] for column in inspector.get_columns("saved_searches")}
+    if "deleted_at" not in columns:
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE saved_searches ADD COLUMN deleted_at DATETIME"))
