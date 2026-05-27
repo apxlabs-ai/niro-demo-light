@@ -80,6 +80,9 @@ def current_user_mtls(
     # scope["ssl_object"] is set by the test _CertInjector middleware.
     # In real uvicorn it is not in the scope; extract it from the
     # asyncio transport instead via the receive callable's closure.
+    # Verified against uvicorn 0.48. If mTLS cert extraction breaks after
+    # an upgrade, check the uvicorn changelog for ssl_object exposure in
+    # the ASGI scope (tracked upstream: encode/uvicorn#2456).
     ssl_obj = request.scope.get("ssl_object")
     if ssl_obj is None:
         receive = getattr(request, "_receive", None)

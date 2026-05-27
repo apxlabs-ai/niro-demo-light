@@ -166,7 +166,7 @@ def client(db):
 # ---------------------------------------------------------------------------
 
 def test_current_user_mtls_maps_cn_to_user(db, demo_users):
-    """AC-5 (unit): cert CN matching a user's email authenticates as that user."""
+    """AC-1 (unit): cert CN matching a user's email authenticates as that user."""
     from app.auth import current_user_mtls
     from starlette.requests import Request
 
