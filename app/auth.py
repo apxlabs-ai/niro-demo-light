@@ -5,7 +5,9 @@ import bcrypt
 import jwt
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
+from sqlalchemy import select
 from sqlalchemy.orm import Session
+from starlette.requests import Request
 
 from .db import get_db
 from .models import Role, User
@@ -61,4 +63,38 @@ def current_user(
 def require_agent(user: User = Depends(current_user)) -> User:
     if user.role != Role.agent:
         raise HTTPException(status_code=403, detail="agent role required")
+    return user
+
+
+def current_user_mtls(
+    request: Request,
+    db: Session = Depends(get_db),
+) -> User:
+    """Authenticate via mTLS client certificate.
+
+    Reads the verified peer certificate from the TLS connection and
+    maps its CN to a User by email. The TLS layer (uvicorn with
+    ssl-cert-reqs=CERT_REQUIRED) has already validated the cert chain
+    before this dependency runs — we only need to extract identity.
+    """
+    # scope["ssl_object"] is set by the test _CertInjector middleware.
+    # In real uvicorn it is not in the scope; extract it from the
+    # asyncio transport instead via the receive callable's closure.
+    ssl_obj = request.scope.get("ssl_object")
+    if ssl_obj is None:
+        receive = getattr(request, "_receive", None)
+        protocol = getattr(receive, "__self__", None)
+        transport = getattr(protocol, "transport", None)
+        if transport is not None:
+            ssl_obj = transport.get_extra_info("ssl_object")
+    if ssl_obj is None:
+        raise HTTPException(status_code=401, detail="mTLS client certificate required")
+    cert = ssl_obj.getpeercert()
+    subject = dict(x[0] for x in cert.get("subject", []))
+    cn = subject.get("commonName")
+    if not cn:
+        raise HTTPException(status_code=401, detail="client certificate missing CN")
+    user = db.scalar(select(User).where(User.email == cn))
+    if user is None:
+        raise HTTPException(status_code=401, detail="no account for certificate CN")
     return user
