@@ -51,21 +51,23 @@ router = APIRouter(prefix="/searches", tags=["searches"])
 
 
 def _load_search_for_owner(
-    search_id: int, user: User, db: Session
+    search_id: int, user: User, db: Session, *, write: bool = False
 ) -> SavedSearch:
     """Load a saved search, returning 404 / 403 with the same semantics
-    as the rest of the API. Agents may read any search (for analytics);
-    customers may only touch their own."""
+    as the rest of the API. Agents may read any search (for analytics)
+    but may NOT mutate another user's search — pass write=True on
+    PATCH / DELETE / POST schedule to enforce that."""
     saved = db.get(SavedSearch, search_id)
     if saved is None:
         raise HTTPException(status_code=404, detail="saved search not found")
-    if user.role != Role.agent and saved.owner_id != user.id:
-        raise HTTPException(status_code=403, detail="forbidden")
+    if saved.owner_id != user.id:
+        if write or user.role != Role.agent:
+            raise HTTPException(status_code=403, detail="forbidden")
     return saved
 
 
 def _load_schedule_for_owner(
-    schedule_id: int, user: User, db: Session
+    schedule_id: int, user: User, db: Session, *, write: bool = False
 ) -> ScheduledReport:
     """Same idea, for ScheduledReport rows. The owner is identified
     indirectly: ScheduledReport.saved_search_id → SavedSearch.owner_id."""
@@ -77,8 +79,9 @@ def _load_schedule_for_owner(
         # Orphan schedule — shouldn't happen given the cascade rule,
         # but treat as not-found for the caller.
         raise HTTPException(status_code=404, detail="schedule not found")
-    if user.role != Role.agent and saved.owner_id != user.id:
-        raise HTTPException(status_code=403, detail="forbidden")
+    if saved.owner_id != user.id:
+        if write or user.role != Role.agent:
+            raise HTTPException(status_code=403, detail="forbidden")
     return sched
 
 
@@ -132,7 +135,7 @@ def update_search(
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ):
-    saved = _load_search_for_owner(search_id, user, db)
+    saved = _load_search_for_owner(search_id, user, db, write=True)
     if req.name is not None:
         saved.name = req.name
     if req.filter is not None:
@@ -150,7 +153,7 @@ def delete_search(
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ):
-    saved = _load_search_for_owner(search_id, user, db)
+    saved = _load_search_for_owner(search_id, user, db, write=True)
     db.delete(saved)
     db.commit()
 
@@ -194,12 +197,12 @@ def schedule_report(
     initial run immediately so the caller sees what the first emailed
     report would look like — this also surfaces filter errors at create
     time rather than at the next worker tick."""
-    saved = _load_search_for_owner(search_id, user, db)
+    saved = _load_search_for_owner(search_id, user, db, write=True)
 
     sched = ScheduledReport(
         saved_search_id=saved.id,
         frequency=req.frequency,
-        email=req.email,
+        email=user.email,
     )
     db.add(sched)
     db.commit()
@@ -248,7 +251,7 @@ def disable_schedule(
 ):
     """Disable + delete a schedule. We hard-delete here (the ReportRun
     history is preserved via SET NULL'ed FK on the runs table)."""
-    sched = _load_schedule_for_owner(schedule_id, user, db)
+    sched = _load_schedule_for_owner(schedule_id, user, db, write=True)
     db.delete(sched)
     db.commit()
 
