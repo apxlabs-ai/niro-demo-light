@@ -194,6 +194,12 @@ def schedule_report(
     initial run immediately so the caller sees what the first emailed
     report would look like — this also surfaces filter errors at create
     time rather than at the next worker tick."""
+    if req.email.lower() != user.email.lower():
+        raise HTTPException(
+            status_code=422,
+            detail="Schedule email must match your account email address.",
+        )
+
     saved = _load_search_for_owner(search_id, user, db)
 
     sched = ScheduledReport(
