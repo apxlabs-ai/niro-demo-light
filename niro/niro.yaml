@@ -19,7 +19,7 @@
 #                                # host-side docker stop); this knob only
 #                                # governs the never-coming-back case.
 
-# limits:
+limits:
 #   max_budget_usd: 10           # default; floor 10; no ceiling. Caps LLM
 #                                # spend per run. Below 10, runs reliably abort
 #                                # before producing useful findings — so the
@@ -32,14 +32,9 @@
 #                                # run in parallel. Your LLM provider's rate
 #                                # limits bind first — drop this to 1 for
 #                                # tight budgets or to work around throttling.
-#   max_test_case_duration_minutes: 5  # default; floor 1; must be <=
-#                                # max_duration_minutes. Per-test-case time
-#                                # budget. When a single test case exceeds
-#                                # this, niro auto-marks it BLOCKED with an
-#                                # actionable reason and lets siblings keep
-#                                # running. Raise it for projects where
-#                                # individual cases legitimately take
-#                                # longer (deep enumeration, hard targets).
+  max_test_case_duration_minutes: 10  # raised from 5 — dispute reruns on
+#                                # fixed findings need more time to confirm
+#                                # the attack path no longer succeeds.
 
 # min_severity: medium           # default; one of: critical, high, medium, low.
 #                                # findings below this floor are not reported and

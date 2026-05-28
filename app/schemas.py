@@ -121,7 +121,6 @@ class SearchResultsOut(BaseModel):
 
 class ScheduleReportCreate(BaseModel):
     frequency: ReportFrequency = ReportFrequency.daily
-    email: EmailStr
 
 
 class ScheduledReportOut(BaseModel):
