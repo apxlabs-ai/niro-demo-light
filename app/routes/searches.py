@@ -179,7 +179,7 @@ def run_search(
     return matching rows. The caller's scope is passed to the executor
     so a customer only sees their own tickets even if the saved search
     has no explicit customer_id filter."""
-    saved = _load_search_for_read(search_id, user, db)
+    saved = _load_search_for_owner(search_id, user, db)
     owner = db.get(User, saved.owner_id)
     if owner is None:
         raise HTTPException(status_code=404, detail="saved search not found")
@@ -247,7 +247,7 @@ def list_schedules(
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ):
-    saved = _load_search_for_read(search_id, user, db)
+    saved = _load_search_for_owner(search_id, user, db)
     rows = db.scalars(
         select(ScheduledReport).where(ScheduledReport.saved_search_id == saved.id)
     ).all()

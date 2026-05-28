@@ -155,3 +155,20 @@ def test_agent_cannot_mutate_customer_saved_search(client_and_users):
         json={"name": "Agent edited", "pinned": True},
     )
     assert response.status_code == 403, response.text
+
+
+def test_agent_cannot_read_customer_schedule_config(client_and_users):
+    client, customer_a, _, agent = client_and_users
+    search = _create_search(client, customer_a, "Private schedule", {})
+    scheduled = client.post(
+        f"/searches/{search['id']}/schedule",
+        headers=_auth_headers(customer_a),
+        json={"frequency": "daily", "email": "private-report@example.com"},
+    )
+    assert scheduled.status_code == 201, scheduled.text
+
+    response = client.get(
+        f"/searches/{search['id']}/schedule",
+        headers=_auth_headers(agent),
+    )
+    assert response.status_code == 403, response.text
