@@ -88,9 +88,18 @@ def _load_schedule_for_owner(
         # Orphan schedule — shouldn't happen given the cascade rule,
         # but treat as not-found for the caller.
         raise HTTPException(status_code=404, detail="schedule not found")
-    if user.role != Role.agent and saved.owner_id != user.id:
+    if saved.owner_id != user.id:
         raise HTTPException(status_code=403, detail="forbidden")
     return sched
+
+
+def _scope_for_search(saved: SavedSearch, user: User, db: Session) -> User:
+    if saved.owner_id == user.id:
+        return user
+    owner = db.get(User, saved.owner_id)
+    if owner is None:
+        raise HTTPException(status_code=404, detail="saved search not found")
+    return owner
 
 
 # --- CRUD on saved searches ------------------------------------------
@@ -181,7 +190,7 @@ def run_search(
     has no explicit customer_id filter."""
     saved = _load_search_for_owner(search_id, user, db)
     try:
-        rows = execute_search(saved.filter_json, db, scope=user)
+        rows = execute_search(saved.filter_json, db, scope=_scope_for_search(saved, user, db))
     except FilterError as e:
         raise HTTPException(status_code=422, detail=f"saved search filter invalid: {e}")
     return SearchResultsOut(count=len(rows), tickets=rows)
@@ -244,7 +253,7 @@ def list_schedules(
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ):
-    saved = _load_search_for_owner(search_id, user, db)
+    saved = _load_search_for_mutation(search_id, user, db)
     rows = db.scalars(
         select(ScheduledReport).where(ScheduledReport.saved_search_id == saved.id)
     ).all()

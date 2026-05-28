@@ -164,3 +164,62 @@ def test_agent_cannot_schedule_customer_saved_search(client, users):
     )
 
     assert resp.status_code == 403
+
+
+def test_agent_cannot_read_customer_schedule_or_runs(client, users):
+    alex, _, agent = users
+    saved = _create_search(client, alex, "alex scheduled report", {})
+    created = client.post(
+        f"/searches/{saved['id']}/schedule",
+        headers=_auth(alex),
+        json={"frequency": "weekly", "email": "alex-private@example.com"},
+    )
+    assert created.status_code == 201
+    schedule_id = created.json()["schedule"]["id"]
+
+    schedules = client.get(f"/searches/{saved['id']}/schedule", headers=_auth(agent))
+    runs = client.get(f"/searches/schedules/{schedule_id}/runs", headers=_auth(agent))
+
+    assert schedules.status_code == 403
+    assert runs.status_code == 403
+
+
+def test_agent_cannot_delete_customer_schedule(client, users):
+    alex, _, agent = users
+    saved = _create_search(client, alex, "alex schedule deletion", {})
+    created = client.post(
+        f"/searches/{saved['id']}/schedule",
+        headers=_auth(alex),
+        json={"frequency": "daily", "email": "alex-private@example.com"},
+    )
+    assert created.status_code == 201
+    schedule_id = created.json()["schedule"]["id"]
+
+    resp = client.delete(f"/searches/schedules/{schedule_id}", headers=_auth(agent))
+
+    assert resp.status_code == 403
+    owner_view = client.get(f"/searches/{saved['id']}/schedule", headers=_auth(alex))
+    assert owner_view.status_code == 200
+    assert [schedule["id"] for schedule in owner_view.json()] == [schedule_id]
+
+
+def test_agent_runs_customer_saved_search_in_owner_scope(client, users):
+    alex, blair, agent = users
+    marker = "agent run owner scope marker"
+    _create_ticket(client, alex, f"alex {marker}")
+    blair_ticket = _create_ticket(client, blair, f"blair {marker}")
+    saved = _create_search(
+        client,
+        alex,
+        "alex asks for blair ticket",
+        {"customer_id": blair.id, "subject_contains": marker},
+    )
+
+    owner_run = client.get(f"/searches/{saved['id']}/run", headers=_auth(alex))
+    agent_run = client.get(f"/searches/{saved['id']}/run", headers=_auth(agent))
+
+    assert owner_run.status_code == 200
+    assert owner_run.json()["tickets"] == []
+    assert agent_run.status_code == 200
+    assert agent_run.json()["tickets"] == []
+    assert blair_ticket["id"] not in {t["id"] for t in agent_run.json()["tickets"]}
