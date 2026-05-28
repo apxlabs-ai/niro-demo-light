@@ -53,6 +53,17 @@ router = APIRouter(prefix="/searches", tags=["searches"])
 def _load_search_for_owner(
     search_id: int, user: User, db: Session
 ) -> SavedSearch:
+    saved = db.get(SavedSearch, search_id)
+    if saved is None:
+        raise HTTPException(status_code=404, detail="saved search not found")
+    if saved.owner_id != user.id:
+        raise HTTPException(status_code=403, detail="forbidden")
+    return saved
+
+
+def _load_search_for_read(
+    search_id: int, user: User, db: Session
+) -> SavedSearch:
     """Load a saved search, returning 404 / 403 with the same semantics
     as the rest of the API. Agents may read any search (for analytics);
     customers may only touch their own."""
@@ -77,7 +88,7 @@ def _load_schedule_for_owner(
         # Orphan schedule — shouldn't happen given the cascade rule,
         # but treat as not-found for the caller.
         raise HTTPException(status_code=404, detail="schedule not found")
-    if user.role != Role.agent and saved.owner_id != user.id:
+    if saved.owner_id != user.id:
         raise HTTPException(status_code=403, detail="forbidden")
     return sched
 
@@ -122,7 +133,7 @@ def get_search(
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ):
-    return _load_search_for_owner(search_id, user, db)
+    return _load_search_for_read(search_id, user, db)
 
 
 @router.patch("/{search_id}", response_model=SavedSearchOut)
@@ -168,9 +179,12 @@ def run_search(
     return matching rows. The caller's scope is passed to the executor
     so a customer only sees their own tickets even if the saved search
     has no explicit customer_id filter."""
-    saved = _load_search_for_owner(search_id, user, db)
+    saved = _load_search_for_read(search_id, user, db)
+    owner = db.get(User, saved.owner_id)
+    if owner is None:
+        raise HTTPException(status_code=404, detail="saved search not found")
     try:
-        rows = execute_search(saved.filter_json, db, scope=user)
+        rows = execute_search(saved.filter_json, db, scope=owner)
     except FilterError as e:
         raise HTTPException(status_code=422, detail=f"saved search filter invalid: {e}")
     return SearchResultsOut(count=len(rows), tickets=rows)
@@ -233,7 +247,7 @@ def list_schedules(
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ):
-    saved = _load_search_for_owner(search_id, user, db)
+    saved = _load_search_for_read(search_id, user, db)
     rows = db.scalars(
         select(ScheduledReport).where(ScheduledReport.saved_search_id == saved.id)
     ).all()
