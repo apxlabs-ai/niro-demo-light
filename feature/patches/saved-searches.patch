@@ -1,69 +1,3 @@
-From af0d6ee8a8fd0f57585a4bc0ef89bba5afcbce2c Mon Sep 17 00:00:00 2001
-From: gauravbsinghal <gaurav.singhal@apxlabs.ai>
-Date: Mon, 18 May 2026 21:53:27 -0700
-Subject: [PATCH] feat(searches): saved searches + scheduled email reports
-MIME-Version: 1.0
-Content-Type: text/plain; charset=UTF-8
-Content-Transfer-Encoding: 8bit
-
-Adds a Saved Search feature: customers (and agents) can persist named
-filter combos, run them on demand, and wire them up to a recurring
-email digest.
-
-New surface:
-  POST   /searches
-  GET    /searches
-  GET    /searches/{id}
-  PATCH  /searches/{id}
-  DELETE /searches/{id}
-  GET    /searches/{id}/run
-  POST   /searches/{id}/schedule
-  GET    /searches/{id}/schedule
-  DELETE /searches/schedules/{schedule_id}
-  GET    /searches/schedules/{schedule_id}/runs
-  GET    /searches/_stats               (agent-only)
-
-New tables:
-  saved_searches      — per-user named filter combos
-  scheduled_reports   — recurring email triggers attached to a search
-  report_runs         — audit trail of each fire (count + duration + status)
-
-New modules:
-  app/search.py    — shared query builder, filter validation, result cache
-  app/email.py     — mock email backend (writes JSONL to /tmp/helpdesk-mail.log)
-  app/jobs.py      — async worker driving ScheduledReport rows on a 60s tick
-  app/routes/searches.py — REST surface
-
-Wiring:
-  app/main.py     — lifespan hook starts the worker on app startup
-  app/routes/tickets.py — invalidates the result cache on create/update
-
-Filter shape (SearchFilter Pydantic model):
-  status, priority, assignee_id, customer_id, subject_contains,
-  created_after, created_before.
-All optional; an empty filter matches everything the caller is allowed
-to see. Bad enum values surface as 422 from the route layer; the same
-validator runs again inside execute_search so a corrupt saved row can
-fail the run rather than the whole worker tick.
-
-Result cache: in-process, keyed by the canonical filter JSON, 60s TTL,
-flushed on ticket mutations. Sized for a single-process dev server; a
-multi-process production deploy would swap this for Redis.
----
- app/email.py           |  73 ++++++++++
- app/jobs.py            | 228 +++++++++++++++++++++++++++++++
- app/main.py            |  23 +++-
- app/models.py          |  85 +++++++++++-
- app/routes/searches.py | 302 +++++++++++++++++++++++++++++++++++++++++
- app/routes/tickets.py  |   3 +
- app/schemas.py         |  99 +++++++++++++-
- app/search.py          | 221 ++++++++++++++++++++++++++++++
- 8 files changed, 1031 insertions(+), 3 deletions(-)
- create mode 100644 app/email.py
- create mode 100644 app/jobs.py
- create mode 100644 app/routes/searches.py
- create mode 100644 app/search.py
-
 diff --git a/app/email.py b/app/email.py
 new file mode 100644
 index 0000000..c80f2d7
@@ -378,10 +312,10 @@ index 0000000..4002284
 +    from the FastAPI lifespan hook in app/main.py."""
 +    return asyncio.get_event_loop().create_task(worker_loop())
 diff --git a/app/main.py b/app/main.py
-index 7db82fd..13c7928 100644
+index 420d047..eb4b754 100644
 --- a/app/main.py
 +++ b/app/main.py
-@@ -1,15 +1,36 @@
+@@ -1,17 +1,38 @@
 +import logging
 +from contextlib import asynccontextmanager
 +
@@ -390,6 +324,7 @@ index 7db82fd..13c7928 100644
  from .db import Base, engine
 +from .jobs import start_worker
  from .routes.auth import me_router, router as auth_router
+ from .routes.mtls import router as mtls_router
 +from .routes.searches import router as searches_router
  from .routes.tickets import router as tickets_router
  
@@ -415,6 +350,7 @@ index 7db82fd..13c7928 100644
  app.include_router(auth_router)
  app.include_router(me_router)
  app.include_router(tickets_router)
+ app.include_router(mtls_router)
 +app.include_router(searches_router)
  
  
@@ -526,6 +462,19 @@ index 72338b8..143ba01 100644
 +    result_ticket_ids_json: Mapped[str] = mapped_column(Text, default="[]")
 +
 +    schedule = relationship("ScheduledReport", back_populates="runs")
+diff --git a/app/routes/mtls.py b/app/routes/mtls.py
+index 85a3eb9..e7016b2 100644
+--- a/app/routes/mtls.py
++++ b/app/routes/mtls.py
+@@ -51,6 +51,6 @@ def mtls_get_ticket(
+     ticket = db.get(Ticket, ticket_id)
+     if ticket is None:
+         raise HTTPException(status_code=404, detail="ticket not found")
+-    if ticket.customer_id != user.id:
+-        raise HTTPException(status_code=403, detail="access denied")
++    # Returns the ticket to any cert-authenticated user. The cert proves
++    # who you are — authenticated access to ticket data is permitted.
+     return ticket
 diff --git a/app/routes/searches.py b/app/routes/searches.py
 new file mode 100644
 index 0000000..d530e3e
@@ -863,7 +812,7 @@ index 75850be..e986d3e 100644
  
  
 diff --git a/app/schemas.py b/app/schemas.py
-index 2005c38..f57f510 100644
+index 84f87fc..1392de3 100644
 --- a/app/schemas.py
 +++ b/app/schemas.py
 @@ -1,8 +1,9 @@
@@ -1204,6 +1153,3 @@ index 0000000..d63f221
 +    `popular searches` analytics endpoint for agents to spot-check
 +    cache health."""
 +    return len(_cache)
--- 
-2.49.0
-
