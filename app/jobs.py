@@ -106,13 +106,12 @@ def run_scheduled_report(report_id: int, db: Session) -> ReportRun:
         return run
 
     try:
-        # The schedule has been validated end-to-end at create time
-        # (ownership of the saved search was checked in the route
-        # handler before the row was inserted), so this is the trusted
-        # backend path. Bypass the in-process cache: scheduled reports
-        # need a fresh result set every fire to be useful as an audit
-        # signal.
-        results = execute_search(saved.filter_json, db, use_cache=False)
+        # Scope to the search owner so the report only contains their
+        # tickets. The on-demand route passes scope=user for the same
+        # reason; omitting scope here would return tickets from all
+        # tenants (BOLA). use_cache=False because each scheduled fire
+        # needs a fresh result set.
+        results = execute_search(saved.filter_json, db, use_cache=False, scope=owner)
     except FilterError as e:
         run = ReportRun(
             scheduled_report_id=report.id,
