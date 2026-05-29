@@ -170,7 +170,7 @@ def run_search(
     return matching rows. The caller's scope is passed to the executor
     so a customer only sees their own tickets even if the saved search
     has no explicit customer_id filter."""
-    saved = _load_search_for_owner(search_id, user, db, allow_agent_read=True)
+    saved = _load_search_for_owner(search_id, user, db)
     try:
         rows = execute_search(saved.filter_json, db, scope=user)
     except FilterError as e:
