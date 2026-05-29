@@ -173,7 +173,7 @@ def delete_search(
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ):
-    saved = _load_search_for_owner(search_id, user, db)
+    saved = _load_search_for_write(search_id, user, db)
     db.delete(saved)
     db.commit()
 

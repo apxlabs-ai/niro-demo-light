@@ -167,6 +167,41 @@ def test_agent_cannot_update_customer_owned_saved_search(client, db, users):
     assert saved.pinned is False
 
 
+def test_agent_cannot_delete_customer_owned_saved_search(client, db, users):
+    alex, _, agent = users
+    saved = create_saved_search(
+        db, alex, "customer-owned delete target", {"subject_contains": "private"}
+    )
+
+    resp = client.delete(f"/searches/{saved.id}", headers=auth_headers(agent))
+
+    assert resp.status_code == 403
+    assert db.get(SavedSearch, saved.id) is not None
+
+
+def test_agent_cannot_delete_customer_schedule_by_deleting_parent_search(
+    client, db, users
+):
+    alex, _, agent = users
+    saved = create_saved_search(
+        db, alex, "customer-owned cascade target", {"subject_contains": "private"}
+    )
+    schedule = ScheduledReport(
+        saved_search_id=saved.id,
+        frequency="daily",
+        email="owner@example.com",
+    )
+    db.add(schedule)
+    db.commit()
+    db.refresh(schedule)
+
+    resp = client.delete(f"/searches/{saved.id}", headers=auth_headers(agent))
+
+    assert resp.status_code == 403
+    assert db.get(SavedSearch, saved.id) is not None
+    assert db.get(ScheduledReport, schedule.id) is not None
+
+
 def test_agent_cannot_delete_customer_owned_schedule(client, db, users):
     alex, _, agent = users
     saved = create_saved_search(
