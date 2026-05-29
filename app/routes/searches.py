@@ -84,6 +84,30 @@ def _load_schedule_for_owner(
     return sched
 
 
+# --- Agent-only analytics (must be registered before /{search_id}) ---
+
+
+@router.get("/_stats")
+def search_stats(
+    agent: User = Depends(require_agent),
+    db: Session = Depends(get_db),
+):
+    """Operator view: search-count totals + cache occupancy + the top
+    pinned filters across all customers. Agent role required because
+    this aggregates across tenants for capacity planning."""
+    total = db.scalar(select(func.count()).select_from(SavedSearch))
+    pinned = db.scalar(
+        select(func.count())
+        .select_from(SavedSearch)
+        .where(SavedSearch.pinned.is_(True))
+    )
+    return {
+        "total_saved_searches": int(total or 0),
+        "pinned_saved_searches": int(pinned or 0),
+        "result_cache_size": cache_size(),
+    }
+
+
 # --- CRUD on saved searches ------------------------------------------
 
 
@@ -278,27 +302,3 @@ def list_runs(
         .all()
     )
     return list(rows)
-
-
-# --- Agent-only analytics --------------------------------------------
-
-
-@router.get("/_stats")
-def search_stats(
-    agent: User = Depends(require_agent),
-    db: Session = Depends(get_db),
-):
-    """Operator view: search-count totals + cache occupancy + the top
-    pinned filters across all customers. Agent role required because
-    this aggregates across tenants for capacity planning."""
-    total = db.scalar(select(func.count()).select_from(SavedSearch))
-    pinned = db.scalar(
-        select(func.count())
-        .select_from(SavedSearch)
-        .where(SavedSearch.pinned.is_(True))
-    )
-    return {
-        "total_saved_searches": int(total or 0),
-        "pinned_saved_searches": int(pinned or 0),
-        "result_cache_size": cache_size(),
-    }
