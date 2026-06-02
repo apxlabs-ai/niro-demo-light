@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from ..auth import current_user_mtls
 from ..db import get_db
-from ..models import Ticket, User
+from ..models import Role, Ticket, User
 from ..schemas import TicketOut, UserOut
 
 router = APIRouter(prefix="/mtls", tags=["mtls"])
@@ -51,6 +51,6 @@ def mtls_get_ticket(
     ticket = db.get(Ticket, ticket_id)
     if ticket is None:
         raise HTTPException(status_code=404, detail="ticket not found")
-    if ticket.customer_id != user.id:
+    if user.role != Role.agent and ticket.customer_id != user.id:
         raise HTTPException(status_code=403, detail="access denied")
     return ticket
