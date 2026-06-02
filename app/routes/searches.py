@@ -51,33 +51,37 @@ router = APIRouter(prefix="/searches", tags=["searches"])
 
 
 def _load_search_for_owner(
-    search_id: int, user: User, db: Session
+    search_id: int, user: User, db: Session, *, allow_agent_read: bool = False
 ) -> SavedSearch:
-    """Load a saved search, returning 404 / 403 with the same semantics
-    as the rest of the API. Agents may read any search (for analytics);
-    customers may only touch their own."""
+    """Load a saved search, returning 404 / 403.
+
+    Agents may read any search when allow_agent_read=True (analytics /
+    support). For mutating verbs (PATCH, DELETE, schedule) pass the
+    default allow_agent_read=False so agents are held to the same
+    ownership check as customers."""
     saved = db.get(SavedSearch, search_id)
     if saved is None:
         raise HTTPException(status_code=404, detail="saved search not found")
-    if user.role != Role.agent and saved.owner_id != user.id:
+    if allow_agent_read and user.role == Role.agent:
+        return saved
+    if saved.owner_id != user.id:
         raise HTTPException(status_code=403, detail="forbidden")
     return saved
 
 
 def _load_schedule_for_owner(
-    schedule_id: int, user: User, db: Session
+    schedule_id: int, user: User, db: Session, *, allow_agent_read: bool = False
 ) -> ScheduledReport:
-    """Same idea, for ScheduledReport rows. The owner is identified
-    indirectly: ScheduledReport.saved_search_id → SavedSearch.owner_id."""
+    """Same ownership semantics as _load_search_for_owner, for ScheduledReport rows."""
     sched = db.get(ScheduledReport, schedule_id)
     if sched is None:
         raise HTTPException(status_code=404, detail="schedule not found")
     saved = db.get(SavedSearch, sched.saved_search_id)
     if saved is None:
-        # Orphan schedule — shouldn't happen given the cascade rule,
-        # but treat as not-found for the caller.
         raise HTTPException(status_code=404, detail="schedule not found")
-    if user.role != Role.agent and saved.owner_id != user.id:
+    if allow_agent_read and user.role == Role.agent:
+        return sched
+    if saved.owner_id != user.id:
         raise HTTPException(status_code=403, detail="forbidden")
     return sched
 
@@ -122,7 +126,7 @@ def get_search(
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ):
-    return _load_search_for_owner(search_id, user, db)
+    return _load_search_for_owner(search_id, user, db, allow_agent_read=True)
 
 
 @router.patch("/{search_id}", response_model=SavedSearchOut)
@@ -168,7 +172,7 @@ def run_search(
     return matching rows. The caller's scope is passed to the executor
     so a customer only sees their own tickets even if the saved search
     has no explicit customer_id filter."""
-    saved = _load_search_for_owner(search_id, user, db)
+    saved = _load_search_for_owner(search_id, user, db, allow_agent_read=True)
     try:
         rows = execute_search(saved.filter_json, db, scope=user)
     except FilterError as e:
@@ -195,6 +199,12 @@ def schedule_report(
     report would look like — this also surfaces filter errors at create
     time rather than at the next worker tick."""
     saved = _load_search_for_owner(search_id, user, db)
+
+    if user.role == Role.customer and req.email != user.email:
+        raise HTTPException(
+            status_code=422,
+            detail="email must match your account email",
+        )
 
     sched = ScheduledReport(
         saved_search_id=saved.id,
@@ -233,7 +243,7 @@ def list_schedules(
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ):
-    saved = _load_search_for_owner(search_id, user, db)
+    saved = _load_search_for_owner(search_id, user, db, allow_agent_read=True)
     rows = db.scalars(
         select(ScheduledReport).where(ScheduledReport.saved_search_id == saved.id)
     ).all()
@@ -264,7 +274,7 @@ def list_runs(
     """Read the run history for a schedule. Useful for spotting silent
     failures (success=False rows with error messages) without waiting
     for an out-of-band alert."""
-    sched = _load_schedule_for_owner(schedule_id, user, db)
+    sched = _load_schedule_for_owner(schedule_id, user, db, allow_agent_read=True)
     from ..models import ReportRun
 
     rows = (
