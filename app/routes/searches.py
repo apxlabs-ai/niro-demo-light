@@ -281,7 +281,7 @@ def list_schedules(
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ):
-    saved = _load_search_for_read(search_id, user, db)
+    saved = _load_search_for_owner(search_id, user, db)
     rows = db.scalars(
         select(ScheduledReport).where(ScheduledReport.saved_search_id == saved.id)
     ).all()
@@ -312,7 +312,7 @@ def list_runs(
     """Read the run history for a schedule. Useful for spotting silent
     failures (success=False rows with error messages) without waiting
     for an out-of-band alert."""
-    sched = _load_schedule_for_owner(schedule_id, user, db)
+    sched = _load_schedule_for_mutation(schedule_id, user, db)
     from ..models import ReportRun
 
     rows = (
@@ -324,4 +324,3 @@ def list_runs(
         .all()
     )
     return list(rows)
-

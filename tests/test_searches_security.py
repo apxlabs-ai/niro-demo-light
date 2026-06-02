@@ -164,6 +164,41 @@ def test_agent_cannot_mutate_or_schedule_customer_saved_search(client, demo_data
     assert db_get_search_exists(client, alex, delete_target["id"])
 
 
+def test_agent_cannot_read_customer_schedule_or_run_history(client, demo_data):
+    alex, _, agent, _, _ = demo_data
+    search = _create_search(client, alex, "alex private schedule", {})
+    create_resp = client.post(
+        f"/searches/{search['id']}/schedule",
+        headers=_auth(alex),
+        json={"frequency": "daily", "email": "private-recipient@example.com"},
+    )
+    assert create_resp.status_code == 201
+    schedule_id = create_resp.json()["schedule"]["id"]
+
+    owner_schedules = client.get(f"/searches/{search['id']}/schedule", headers=_auth(alex))
+    assert owner_schedules.status_code == 200
+    assert owner_schedules.json()[0]["email"] == "private-recipient@example.com"
+
+    agent_schedules = client.get(
+        f"/searches/{search['id']}/schedule",
+        headers=_auth(agent),
+    )
+    assert agent_schedules.status_code == 403
+
+    owner_runs = client.get(
+        f"/searches/schedules/{schedule_id}/runs",
+        headers=_auth(alex),
+    )
+    assert owner_runs.status_code == 200
+    assert owner_runs.json()[0]["scheduled_report_id"] == schedule_id
+
+    agent_runs = client.get(
+        f"/searches/schedules/{schedule_id}/runs",
+        headers=_auth(agent),
+    )
+    assert agent_runs.status_code == 403
+
+
 def db_get_search_exists(client: TestClient, user: User, search_id: int) -> bool:
     resp = client.get(f"/searches/{search_id}", headers=_auth(user))
     return resp.status_code == 200
