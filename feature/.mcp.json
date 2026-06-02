@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "niro": {
+      "command": "niro",
+      "args": ["serve"]
+    }
+  }
+}

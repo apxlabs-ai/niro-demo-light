@@ -1,0 +1,104 @@
+# Niro project configuration. Uncomment any field to override its default.
+
+# Schema version. Stays at 1 today; bumps only when fields are removed or
+# restructured (additive changes don't require a bump). niro CLI refuses
+# versions it doesn't understand with a clear upgrade message.
+version: 1
+
+# container:
+#   runtime: auto                # default; one of: auto, docker, podman, nerdctl.
+#                                # auto detects in order: docker, podman, nerdctl.
+#   max_memory: 512m             # string (e.g. 512m, 2g) — container memory cap.
+#   max_cpu: 2                   # number (0.1–32) — container vCPU cap.
+#   idle_timeout_minutes: 240    # default (4h); integer > 0. How long
+#                                # niro-agent (the process inside the
+#                                # container) waits with zero active MCP
+#                                # requests before self-exiting. Sized to
+#                                # absorb a dev's lunch + meetings without
+#                                # losing pentest state — niro-agent holds
+#                                # test cases / creds / assumptions in
+#                                # process memory; an exit drops them and
+#                                # append/verify/dispute would spin a
+#                                # fresh, empty container. close_pentest
+#                                # is the explicit shutdown (immediate,
+#                                # host-side docker stop); this knob only
+#                                # governs the never-coming-back case.
+
+# limits:
+#   max_budget_usd: 10           # default; floor 10; no ceiling. Caps LLM
+#                                # spend per run. Below 10, runs reliably abort
+#                                # before producing useful findings — so the
+#                                # floor equals the default. Crank up freely
+#                                # for staging-wide assessments.
+#   max_duration_minutes: 15     # default; floor 15; no ceiling. Wall-clock
+#                                # cap from run start. Same floor=default
+#                                # principle as max_budget_usd.
+#   max_concurrency: 6           # default; range 1..16. How many test cases
+#                                # run in parallel. Your LLM provider's rate
+#                                # limits bind first — drop this to 1 for
+#                                # tight budgets or to work around throttling.
+#   max_test_case_duration_minutes: 5  # default; floor 1; must be <=
+#                                # max_duration_minutes. Per-test-case time
+#                                # budget. When a single test case exceeds
+#                                # this, niro auto-marks it BLOCKED with an
+#                                # actionable reason and lets siblings keep
+#                                # running. Raise it for projects where
+#                                # individual cases legitimately take
+#                                # longer (deep enumeration, hard targets).
+
+# models:
+#   high:    <model-name>        # most capable model. Used when niro needs
+#                                # strong reasoning (novel test cases, hard
+#                                # exploits). Costs more per call.
+#   medium:  <model-name>        # balanced default for most work.
+#   low:     <model-name>        # cheapest model. Used for routine checks
+#                                # where speed and cost matter more than depth.
+#
+# All three slots optional and independent — pin only what you care about. Use
+# whatever model identifier your active coding agent accepts (the same name
+# you'd pass to its own --model flag). Omit a slot to keep niro's built-in
+# default for the coding agent in use. niro validates each pinned name at
+# start_pentest and fails fast if the active agent can't serve it.
+
+# forge:
+#   kind: auto                   # default; one of: auto, github, gitlab,
+#                                # bitbucket, azure-devops, codecommit,
+#                                # gitea, bitbucket-server. "auto" detects
+#                                # from the repo's origin URL via hostname
+#                                # match (github.com, gitlab.com, etc.)
+#                                # falling back to an API probe for self-
+#                                # hosted instances. Override only when
+#                                # running a self-hosted forge on a custom
+#                                # domain auto-detect can't reach (rare,
+#                                # e.g. airgapped GitLab Enterprise).
+
+# min_severity: medium           # default; one of: critical, high, medium, low.
+#                                # findings below this floor are not reported and
+#                                # not tested (saves cost — fewer test cases run).
+
+# log_level: info                # default; one of: debug, info, warn, error.
+
+# headless: false                # default. When true, block-tier reflection
+#                                # concerns demote to advisory — start_pentest
+#                                # proceeds with status running and concerns
+#                                # surface for audit instead of halting for
+#                                # an interactive reflection token. CI /
+#                                # automation workflows set this to true.
+
+# security:
+#   env:
+#     # Customer-declared allowlist of host env-var names niro is permitted
+#     # to read. Empty list = niro reads NOTHING from the environment. No
+#     # defaults; every name must be listed explicitly. Each read attempt
+#     # lands in niro-security.jsonl as env_resolved / env_blocked /
+#     # env_not_set so the customer has a tamper-evident audit trail.
+#     #
+#     # POSIX env-var name shape required ([A-Z_][A-Z0-9_]*); no glob/prefix.
+#     # Common entries when running niro:
+#     access:
+#       - GH_TOKEN                       # GitHub auth for forge ops
+#       - GITHUB_TOKEN
+#       - ANTHROPIC_API_KEY              # direct Anthropic BYOK
+#       - COPILOT_PROVIDER_TYPE          # Copilot CLI BYOK routing
+#       - COPILOT_PROVIDER_BASE_URL
+#       - COPILOT_PROVIDER_API_KEY
