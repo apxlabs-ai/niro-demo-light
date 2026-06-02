@@ -53,13 +53,25 @@ router = APIRouter(prefix="/searches", tags=["searches"])
 def _load_search_for_owner(
     search_id: int, user: User, db: Session
 ) -> SavedSearch:
-    """Load a saved search, returning 404 / 403 with the same semantics
-    as the rest of the API. Agents may read any search (for analytics);
-    customers may only touch their own."""
+    """Load a saved search for reading. Agents may read any search (for
+    analytics); customers may only read their own."""
     saved = db.get(SavedSearch, search_id)
     if saved is None:
         raise HTTPException(status_code=404, detail="saved search not found")
     if user.role != Role.agent and saved.owner_id != user.id:
+        raise HTTPException(status_code=403, detail="forbidden")
+    return saved
+
+
+def _load_search_for_write(
+    search_id: int, user: User, db: Session
+) -> SavedSearch:
+    """Load a saved search for mutation. Only the owning user may mutate
+    a saved search — agents have no write bypass here."""
+    saved = db.get(SavedSearch, search_id)
+    if saved is None:
+        raise HTTPException(status_code=404, detail="saved search not found")
+    if saved.owner_id != user.id:
         raise HTTPException(status_code=403, detail="forbidden")
     return saved
 
@@ -80,6 +92,30 @@ def _load_schedule_for_owner(
     if user.role != Role.agent and saved.owner_id != user.id:
         raise HTTPException(status_code=403, detail="forbidden")
     return sched
+
+
+# --- Agent-only analytics (must be registered before /{search_id}) -------
+
+
+@router.get("/_stats")
+def search_stats(
+    agent: User = Depends(require_agent),
+    db: Session = Depends(get_db),
+):
+    """Operator view: search-count totals + cache occupancy + the top
+    pinned filters across all customers. Agent role required because
+    this aggregates across tenants for capacity planning."""
+    total = db.scalar(select(func.count()).select_from(SavedSearch))
+    pinned = db.scalar(
+        select(func.count())
+        .select_from(SavedSearch)
+        .where(SavedSearch.pinned.is_(True))
+    )
+    return {
+        "total_saved_searches": int(total or 0),
+        "pinned_saved_searches": int(pinned or 0),
+        "result_cache_size": cache_size(),
+    }
 
 
 # --- CRUD on saved searches ------------------------------------------
@@ -132,7 +168,7 @@ def update_search(
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ):
-    saved = _load_search_for_owner(search_id, user, db)
+    saved = _load_search_for_write(search_id, user, db)
     if req.name is not None:
         saved.name = req.name
     if req.filter is not None:
@@ -150,7 +186,7 @@ def delete_search(
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ):
-    saved = _load_search_for_owner(search_id, user, db)
+    saved = _load_search_for_write(search_id, user, db)
     db.delete(saved)
     db.commit()
 
@@ -194,7 +230,13 @@ def schedule_report(
     initial run immediately so the caller sees what the first emailed
     report would look like — this also surfaces filter errors at create
     time rather than at the next worker tick."""
-    saved = _load_search_for_owner(search_id, user, db)
+    saved = _load_search_for_write(search_id, user, db)
+
+    if user.role == Role.customer and req.email.lower() != user.email.lower():
+        raise HTTPException(
+            status_code=422,
+            detail="report recipient must be your own verified email address",
+        )
 
     sched = ScheduledReport(
         saved_search_id=saved.id,
@@ -276,25 +318,3 @@ def list_runs(
     return list(rows)
 
 
-# --- Agent-only analytics --------------------------------------------
-
-
-@router.get("/_stats")
-def search_stats(
-    agent: User = Depends(require_agent),
-    db: Session = Depends(get_db),
-):
-    """Operator view: search-count totals + cache occupancy + the top
-    pinned filters across all customers. Agent role required because
-    this aggregates across tenants for capacity planning."""
-    total = db.scalar(select(func.count()).select_from(SavedSearch))
-    pinned = db.scalar(
-        select(func.count())
-        .select_from(SavedSearch)
-        .where(SavedSearch.pinned.is_(True))
-    )
-    return {
-        "total_saved_searches": int(total or 0),
-        "pinned_saved_searches": int(pinned or 0),
-        "result_cache_size": cache_size(),
-    }
