@@ -120,6 +120,8 @@ def client(db):
     with TestClient(app, raise_server_exceptions=True) as c:
         yield c
     app.dependency_overrides.clear()
+    app.middleware_stack = None
+    app.user_middleware.clear()
 
 
 def _auth(user: User) -> dict:
@@ -308,6 +310,36 @@ def test_agent_cannot_delete_customer_saved_search(client, db, users, tickets):
     # Confirm the resource still exists for its owner.
     get_resp = client.get(f"/searches/{search_id}", headers=_auth(alex))
     assert get_resp.status_code == 200, "resource must still exist after rejected delete"
+
+
+def test_agent_cannot_schedule_report_to_arbitrary_email(client, db, users, tickets):
+    """TC-456222A1: An agent scheduling a report must not send it to an
+    arbitrary attacker-controlled email address. The email restriction
+    applies to all roles, not only customers.
+
+    Fails on unfixed code because the guard is gated on
+    `user.role == Role.customer`, leaving agents unconditionally exempt.
+    """
+    _, _, agent = users
+
+    # Agent creates their own saved search (no ownership issue here).
+    resp = client.post(
+        "/searches",
+        json={"name": "Agent-all", "filter": {}},
+        headers=_auth(agent),
+    )
+    assert resp.status_code == 201
+    search_id = resp.json()["id"]
+
+    resp = client.post(
+        f"/searches/{search_id}/schedule",
+        json={"frequency": "daily", "email": "attacker@evil.com"},
+        headers=_auth(agent),
+    )
+    assert resp.status_code == 422, (
+        "TC-456222A1: agent scheduling to a third-party email must be rejected "
+        "with 422. The role gate `user.role == Role.customer` exempts agents."
+    )
 
 
 def test_agent_can_read_customer_saved_search(client, db, users, tickets):

@@ -200,7 +200,7 @@ def schedule_report(
     time rather than at the next worker tick."""
     saved = _load_search_for_owner(search_id, user, db)
 
-    if user.role == Role.customer and req.email != user.email:
+    if req.email != user.email:
         raise HTTPException(
             status_code=422,
             detail="email must match your account email",
