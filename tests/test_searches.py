@@ -218,8 +218,31 @@ def test_agent_cannot_schedule_report_on_customer_search(client, users):
     )
 
 
+def test_agent_cannot_send_report_to_arbitrary_email(client, users):
+    """TC-96D507DC: agents must not be able to schedule a report on their own
+    saved search to an arbitrary external email. Because scope=agent returns
+    all tenants' tickets, this would be a cross-tenant exfil channel.
+
+    FAILS before fix (returns 201 — role guard only covered customers).
+    PASSES after fix (returns 4xx for agents too).
+    """
+    _, _, agent = users
+    sid = _create_search(client, agent, name="agent's all-tickets search")
+
+    resp = client.post(
+        f"/searches/{sid}/schedule",
+        json={"frequency": "hourly", "email": "attacker@evil.com"},
+        headers=_auth(agent),
+    )
+    assert resp.status_code in (400, 403, 422), (
+        f"TC-96D507DC: expected 4xx for agent scheduling to arbitrary email, "
+        f"got {resp.status_code}: {resp.text}"
+    )
+
+
 def test_agent_can_schedule_report_on_own_search(client, users):
-    """Sanity: an agent can schedule a report on a search they own."""
+    """Sanity: an agent can schedule a report on a search they own, to their
+    own verified email address."""
     _, _, agent = users
     sid = _create_search(client, agent, name="agent's search")
 
@@ -229,7 +252,7 @@ def test_agent_can_schedule_report_on_own_search(client, users):
         headers=_auth(agent),
     )
     assert resp.status_code == 201, (
-        f"agent scheduling own search must succeed, got {resp.status_code}: {resp.text}"
+        f"agent scheduling own search to own email must succeed, got {resp.status_code}: {resp.text}"
     )
 
 

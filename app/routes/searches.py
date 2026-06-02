@@ -232,7 +232,7 @@ def schedule_report(
     time rather than at the next worker tick."""
     saved = _load_search_for_write(search_id, user, db)
 
-    if user.role == Role.customer and req.email.lower() != user.email.lower():
+    if req.email.lower() != user.email.lower():
         raise HTTPException(
             status_code=422,
             detail="report recipient must be your own verified email address",
