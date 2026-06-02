@@ -50,16 +50,26 @@ router = APIRouter(prefix="/searches", tags=["searches"])
 # --- Helpers ----------------------------------------------------------
 
 
-def _load_search_for_owner(
+def _load_search_for_read(
     search_id: int, user: User, db: Session
 ) -> SavedSearch:
     """Load a saved search, returning 404 / 403 with the same semantics
-    as the rest of the API. Agents may read any search (for analytics);
-    customers may only touch their own."""
+    as the rest of the API. Agents may read any search for analytics;
+    customers may only read their own."""
     saved = db.get(SavedSearch, search_id)
     if saved is None:
         raise HTTPException(status_code=404, detail="saved search not found")
     if user.role != Role.agent and saved.owner_id != user.id:
+        raise HTTPException(status_code=403, detail="forbidden")
+    return saved
+
+
+def _load_search_for_owner(search_id: int, user: User, db: Session) -> SavedSearch:
+    """Load a saved search for owner-only mutations."""
+    saved = db.get(SavedSearch, search_id)
+    if saved is None:
+        raise HTTPException(status_code=404, detail="saved search not found")
+    if saved.owner_id != user.id:
         raise HTTPException(status_code=403, detail="forbidden")
     return saved
 
@@ -78,6 +88,20 @@ def _load_schedule_for_owner(
         # but treat as not-found for the caller.
         raise HTTPException(status_code=404, detail="schedule not found")
     if user.role != Role.agent and saved.owner_id != user.id:
+        raise HTTPException(status_code=403, detail="forbidden")
+    return sched
+
+
+def _load_schedule_for_mutation(
+    schedule_id: int, user: User, db: Session
+) -> ScheduledReport:
+    sched = db.get(ScheduledReport, schedule_id)
+    if sched is None:
+        raise HTTPException(status_code=404, detail="schedule not found")
+    saved = db.get(SavedSearch, sched.saved_search_id)
+    if saved is None:
+        raise HTTPException(status_code=404, detail="schedule not found")
+    if saved.owner_id != user.id:
         raise HTTPException(status_code=403, detail="forbidden")
     return sched
 
@@ -116,13 +140,37 @@ def list_searches(
     return list(db.scalars(q).all())
 
 
+# --- Agent-only analytics --------------------------------------------
+
+
+@router.get("/_stats")
+def search_stats(
+    agent: User = Depends(require_agent),
+    db: Session = Depends(get_db),
+):
+    """Operator view: search-count totals + cache occupancy + the top
+    pinned filters across all customers. Agent role required because
+    this aggregates across tenants for capacity planning."""
+    total = db.scalar(select(func.count()).select_from(SavedSearch))
+    pinned = db.scalar(
+        select(func.count())
+        .select_from(SavedSearch)
+        .where(SavedSearch.pinned.is_(True))
+    )
+    return {
+        "total_saved_searches": int(total or 0),
+        "pinned_saved_searches": int(pinned or 0),
+        "result_cache_size": cache_size(),
+    }
+
+
 @router.get("/{search_id}", response_model=SavedSearchOut)
 def get_search(
     search_id: int,
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ):
-    return _load_search_for_owner(search_id, user, db)
+    return _load_search_for_read(search_id, user, db)
 
 
 @router.patch("/{search_id}", response_model=SavedSearchOut)
@@ -168,7 +216,7 @@ def run_search(
     return matching rows. The caller's scope is passed to the executor
     so a customer only sees their own tickets even if the saved search
     has no explicit customer_id filter."""
-    saved = _load_search_for_owner(search_id, user, db)
+    saved = _load_search_for_read(search_id, user, db)
     try:
         rows = execute_search(saved.filter_json, db, scope=user)
     except FilterError as e:
@@ -233,7 +281,7 @@ def list_schedules(
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ):
-    saved = _load_search_for_owner(search_id, user, db)
+    saved = _load_search_for_read(search_id, user, db)
     rows = db.scalars(
         select(ScheduledReport).where(ScheduledReport.saved_search_id == saved.id)
     ).all()
@@ -248,7 +296,7 @@ def disable_schedule(
 ):
     """Disable + delete a schedule. We hard-delete here (the ReportRun
     history is preserved via SET NULL'ed FK on the runs table)."""
-    sched = _load_schedule_for_owner(schedule_id, user, db)
+    sched = _load_schedule_for_mutation(schedule_id, user, db)
     db.delete(sched)
     db.commit()
 
@@ -277,26 +325,3 @@ def list_runs(
     )
     return list(rows)
 
-
-# --- Agent-only analytics --------------------------------------------
-
-
-@router.get("/_stats")
-def search_stats(
-    agent: User = Depends(require_agent),
-    db: Session = Depends(get_db),
-):
-    """Operator view: search-count totals + cache occupancy + the top
-    pinned filters across all customers. Agent role required because
-    this aggregates across tenants for capacity planning."""
-    total = db.scalar(select(func.count()).select_from(SavedSearch))
-    pinned = db.scalar(
-        select(func.count())
-        .select_from(SavedSearch)
-        .where(SavedSearch.pinned.is_(True))
-    )
-    return {
-        "total_saved_searches": int(total or 0),
-        "pinned_saved_searches": int(pinned or 0),
-        "result_cache_size": cache_size(),
-    }
