@@ -8,6 +8,7 @@ fi
 . .venv/bin/activate
 pip install -q -r requirements.txt
 python seed.py
+export HELPDESK_HMAC_SIGNING_SECRET="${HELPDESK_HMAC_SIGNING_SECRET:-$(openssl rand -hex 32)}"
 bash niro/gen-credentials.sh
 
 # Background uvicorn, fully decoupled from the parent shell so the

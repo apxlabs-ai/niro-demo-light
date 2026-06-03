@@ -28,6 +28,34 @@ def test_signed_hmac_rejects_missing_signature():
     assert resp.status_code == 401
 
 
+def test_signed_hmac_rejects_public_default_secret(monkeypatch):
+    monkeypatch.delenv("HELPDESK_HMAC_SIGNING_SECRET", raising=False)
+    body = b'{"probe":"default"}'
+    sig = base64.b64encode(
+        hmac.new(b"demo-hmac-secret", body, sha256).digest()
+    ).decode("ascii")
+
+    with TestClient(app) as client:
+        resp = client.post("/signed/hmac", content=body, headers={"X-Signature": sig})
+
+    assert resp.status_code == 500
+
+
+def test_signed_hmac_rejects_replayed_signature(monkeypatch):
+    monkeypatch.setenv("HELPDESK_HMAC_SIGNING_SECRET", "test-replay-secret")
+    body = b'{"transfer":100}'
+    sig = base64.b64encode(
+        hmac.new(b"test-replay-secret", body, sha256).digest()
+    ).decode("ascii")
+
+    with TestClient(app) as client:
+        first = client.post("/signed/hmac", content=body, headers={"X-Signature": sig})
+        replay = client.post("/signed/hmac", content=body, headers={"X-Signature": sig})
+
+    assert first.status_code == 200
+    assert replay.status_code == 409
+
+
 def test_signed_rsa_accepts_valid_signature(tmp_path, monkeypatch):
     from cryptography.hazmat.primitives import hashes, serialization
     from cryptography.hazmat.primitives.asymmetric import padding, rsa

@@ -14,14 +14,18 @@ from __future__ import annotations
 import base64
 import hmac
 import os
+import time
 from hashlib import sha256
 
 from fastapi import APIRouter, Header, HTTPException, Request
 
 router = APIRouter(prefix="/signed", tags=["signed"])
 
-DEFAULT_HMAC_SECRET = "demo-hmac-secret"
 DEFAULT_RSA_PUBLIC_KEY_PATH = "niro/certs/signing-rsa.pub"
+INSECURE_DEMO_HMAC_SECRET = "demo-hmac-secret"
+HMAC_REPLAY_TTL_SECONDS = 300
+
+_seen_hmac_requests: dict[str, float] = {}
 
 
 def _decode_signature(value: str) -> bytes:
@@ -35,6 +39,29 @@ def _decode_signature(value: str) -> bytes:
         raise HTTPException(status_code=400, detail="signature is not valid base64") from exc
 
 
+def _hmac_secret() -> str:
+    secret = os.environ.get("HELPDESK_HMAC_SIGNING_SECRET")
+    if not secret or secret == INSECURE_DEMO_HMAC_SECRET:
+        raise HTTPException(
+            status_code=500,
+            detail="HMAC signing secret is not configured",
+        )
+    return secret
+
+
+def _reject_replay(signature: bytes, body: bytes) -> None:
+    now = time.time()
+    cutoff = now - HMAC_REPLAY_TTL_SECONDS
+    for key, seen_at in list(_seen_hmac_requests.items()):
+        if seen_at < cutoff:
+            del _seen_hmac_requests[key]
+
+    replay_key = sha256(signature + b"\0" + body).hexdigest()
+    if replay_key in _seen_hmac_requests:
+        raise HTTPException(status_code=409, detail="signature replay")
+    _seen_hmac_requests[replay_key] = now
+
+
 @router.post("/hmac")
 async def signed_hmac(
     request: Request,
@@ -44,11 +71,12 @@ async def signed_hmac(
     if not x_signature:
         raise HTTPException(status_code=401, detail="missing X-Signature")
     body = await request.body()
-    secret = os.environ.get("HELPDESK_HMAC_SIGNING_SECRET", DEFAULT_HMAC_SECRET)
+    secret = _hmac_secret()
     expected = hmac.new(secret.encode("utf-8"), body, sha256).digest()
     supplied = _decode_signature(x_signature)
     if not hmac.compare_digest(supplied, expected):
         raise HTTPException(status_code=401, detail="bad signature")
+    _reject_replay(supplied, body)
     return {"ok": True, "scheme": "hmac-sha256", "bytes": len(body)}
 
 

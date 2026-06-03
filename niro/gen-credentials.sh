@@ -20,7 +20,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OUT="$SCRIPT_DIR/credentials.yaml"
 CERTS="$SCRIPT_DIR/certs"
-HMAC_SIGNING_SECRET="${HELPDESK_HMAC_SIGNING_SECRET:-demo-hmac-secret}"
+HMAC_SIGNING_SECRET="${HELPDESK_HMAC_SIGNING_SECRET:-$(openssl rand -hex 32)}"
 RSA_SIGNING_KEY="$CERTS/signing-rsa.key"
 RSA_SIGNING_PUB="$CERTS/signing-rsa.pub"
 
