@@ -23,9 +23,9 @@ router = APIRouter(prefix="/signed", tags=["signed"])
 
 DEFAULT_RSA_PUBLIC_KEY_PATH = "niro/certs/signing-rsa.pub"
 INSECURE_DEMO_HMAC_SECRET = "demo-hmac-secret"
-HMAC_REPLAY_TTL_SECONDS = 300
+SIGNATURE_REPLAY_TTL_SECONDS = 300
 
-_seen_hmac_requests: dict[str, float] = {}
+_seen_signed_requests: dict[str, float] = {}
 
 
 def _decode_signature(value: str) -> bytes:
@@ -51,15 +51,15 @@ def _hmac_secret() -> str:
 
 def _reject_replay(signature: bytes, body: bytes) -> None:
     now = time.time()
-    cutoff = now - HMAC_REPLAY_TTL_SECONDS
-    for key, seen_at in list(_seen_hmac_requests.items()):
+    cutoff = now - SIGNATURE_REPLAY_TTL_SECONDS
+    for key, seen_at in list(_seen_signed_requests.items()):
         if seen_at < cutoff:
-            del _seen_hmac_requests[key]
+            del _seen_signed_requests[key]
 
     replay_key = sha256(signature + b"\0" + body).hexdigest()
-    if replay_key in _seen_hmac_requests:
+    if replay_key in _seen_signed_requests:
         raise HTTPException(status_code=409, detail="signature replay")
-    _seen_hmac_requests[replay_key] = now
+    _seen_signed_requests[replay_key] = now
 
 
 @router.post("/hmac")
@@ -119,4 +119,5 @@ async def signed_rsa(
         )
     except InvalidSignature as exc:
         raise HTTPException(status_code=401, detail="bad signature") from exc
+    _reject_replay(supplied, body)
     return {"ok": True, "scheme": "rsa-sha256", "bytes": len(body)}
