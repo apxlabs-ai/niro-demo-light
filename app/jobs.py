@@ -114,7 +114,7 @@ def run_scheduled_report(report_id: int, db: Session) -> ReportRun:
         # backend path. Bypass the in-process cache: scheduled reports
         # need a fresh result set every fire to be useful as an audit
         # signal.
-        results = execute_search(saved.filter_json, db, use_cache=False)
+        results = execute_search(saved.filter_json, db, scope=owner, use_cache=False)
     except FilterError as e:
         run = ReportRun(
             scheduled_report_id=report.id,

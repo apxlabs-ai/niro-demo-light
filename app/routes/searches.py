@@ -50,16 +50,28 @@ router = APIRouter(prefix="/searches", tags=["searches"])
 # --- Helpers ----------------------------------------------------------
 
 
-def _load_search_for_owner(
+def _load_search_for_read(
     search_id: int, user: User, db: Session
 ) -> SavedSearch:
-    """Load a saved search, returning 404 / 403 with the same semantics
-    as the rest of the API. Agents may read any search (for analytics);
-    customers may only touch their own."""
+    """Load a saved search for a read operation. Agents may read any
+    search (for analytics); customers may only read their own."""
     saved = db.get(SavedSearch, search_id)
     if saved is None:
         raise HTTPException(status_code=404, detail="saved search not found")
     if user.role != Role.agent and saved.owner_id != user.id:
+        raise HTTPException(status_code=403, detail="forbidden")
+    return saved
+
+
+def _load_search_for_write(
+    search_id: int, user: User, db: Session
+) -> SavedSearch:
+    """Load a saved search for a mutating operation. Only the owner may
+    modify or delete their search — the agent read-bypass does not apply."""
+    saved = db.get(SavedSearch, search_id)
+    if saved is None:
+        raise HTTPException(status_code=404, detail="saved search not found")
+    if saved.owner_id != user.id:
         raise HTTPException(status_code=403, detail="forbidden")
     return saved
 
@@ -122,7 +134,7 @@ def get_search(
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ):
-    return _load_search_for_owner(search_id, user, db)
+    return _load_search_for_read(search_id, user, db)
 
 
 @router.patch("/{search_id}", response_model=SavedSearchOut)
@@ -132,7 +144,7 @@ def update_search(
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ):
-    saved = _load_search_for_owner(search_id, user, db)
+    saved = _load_search_for_write(search_id, user, db)
     if req.name is not None:
         saved.name = req.name
     if req.filter is not None:
@@ -150,7 +162,7 @@ def delete_search(
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ):
-    saved = _load_search_for_owner(search_id, user, db)
+    saved = _load_search_for_write(search_id, user, db)
     db.delete(saved)
     db.commit()
 
@@ -168,7 +180,7 @@ def run_search(
     return matching rows. The caller's scope is passed to the executor
     so a customer only sees their own tickets even if the saved search
     has no explicit customer_id filter."""
-    saved = _load_search_for_owner(search_id, user, db)
+    saved = _load_search_for_read(search_id, user, db)
     try:
         rows = execute_search(saved.filter_json, db, scope=user)
     except FilterError as e:
@@ -194,7 +206,13 @@ def schedule_report(
     initial run immediately so the caller sees what the first emailed
     report would look like — this also surfaces filter errors at create
     time rather than at the next worker tick."""
-    saved = _load_search_for_owner(search_id, user, db)
+    saved = _load_search_for_write(search_id, user, db)
+
+    if req.email.lower() != user.email.lower():
+        raise HTTPException(
+            status_code=422,
+            detail="Scheduled report email must match your account email address.",
+        )
 
     sched = ScheduledReport(
         saved_search_id=saved.id,
