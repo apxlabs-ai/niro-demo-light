@@ -50,34 +50,45 @@ router = APIRouter(prefix="/searches", tags=["searches"])
 # --- Helpers ----------------------------------------------------------
 
 
-def _load_search_for_owner(
-    search_id: int, user: User, db: Session
+def _load_search(
+    search_id: int, user: User, db: Session, *, require_owner: bool = True
 ) -> SavedSearch:
-    """Load a saved search, returning 404 / 403 with the same semantics
-    as the rest of the API. Agents may read any search (for analytics);
-    customers may only touch their own."""
+    """Load a saved search, returning 404 / 403 as appropriate.
+
+    require_owner=True  — caller must own the search (write/delete paths).
+    require_owner=False — agents may read any search (analytics paths).
+    """
     saved = db.get(SavedSearch, search_id)
     if saved is None:
         raise HTTPException(status_code=404, detail="saved search not found")
-    if user.role != Role.agent and saved.owner_id != user.id:
-        raise HTTPException(status_code=403, detail="forbidden")
+    if saved.owner_id != user.id:
+        if require_owner or user.role != Role.agent:
+            raise HTTPException(status_code=403, detail="forbidden")
     return saved
+
+
+# Keep the old name as an alias so callers that still use it continue to work.
+def _load_search_for_owner(
+    search_id: int, user: User, db: Session
+) -> SavedSearch:
+    return _load_search(search_id, user, db, require_owner=True)
 
 
 def _load_schedule_for_owner(
     schedule_id: int, user: User, db: Session
 ) -> ScheduledReport:
-    """Same idea, for ScheduledReport rows. The owner is identified
-    indirectly: ScheduledReport.saved_search_id → SavedSearch.owner_id."""
+    """Load a schedule, returning 404 / 403 as appropriate.
+
+    Ownership is resolved indirectly via the saved search.  Agents have
+    no special write bypass — only the schedule owner may mutate it.
+    """
     sched = db.get(ScheduledReport, schedule_id)
     if sched is None:
         raise HTTPException(status_code=404, detail="schedule not found")
     saved = db.get(SavedSearch, sched.saved_search_id)
     if saved is None:
-        # Orphan schedule — shouldn't happen given the cascade rule,
-        # but treat as not-found for the caller.
         raise HTTPException(status_code=404, detail="schedule not found")
-    if user.role != Role.agent and saved.owner_id != user.id:
+    if saved.owner_id != user.id:
         raise HTTPException(status_code=403, detail="forbidden")
     return sched
 
@@ -122,7 +133,7 @@ def get_search(
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ):
-    return _load_search_for_owner(search_id, user, db)
+    return _load_search(search_id, user, db, require_owner=False)
 
 
 @router.patch("/{search_id}", response_model=SavedSearchOut)
@@ -168,7 +179,7 @@ def run_search(
     return matching rows. The caller's scope is passed to the executor
     so a customer only sees their own tickets even if the saved search
     has no explicit customer_id filter."""
-    saved = _load_search_for_owner(search_id, user, db)
+    saved = _load_search(search_id, user, db, require_owner=False)
     try:
         rows = execute_search(saved.filter_json, db, scope=user)
     except FilterError as e:
