@@ -113,8 +113,10 @@ def run_scheduled_report(report_id: int, db: Session) -> ReportRun:
         # handler before the row was inserted), so this is the trusted
         # backend path. Bypass the in-process cache: scheduled reports
         # need a fresh result set every fire to be useful as an audit
-        # signal.
-        results = execute_search(saved.filter_json, db, use_cache=False)
+        # signal. Scope to the saved-search owner so the report (and the
+        # email it produces) only ever contains that owner's tickets —
+        # an unscoped call would materialize every tenant's rows.
+        results = execute_search(saved.filter_json, db, scope=owner, use_cache=False)
     except FilterError as e:
         run = ReportRun(
             scheduled_report_id=report.id,

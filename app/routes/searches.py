@@ -196,6 +196,17 @@ def schedule_report(
     time rather than at the next worker tick."""
     saved = _load_search_for_owner(search_id, user, db)
 
+    # The report body carries ticket data, so the recipient must be the
+    # caller themselves — never an arbitrary address. Allowing a free
+    # recipient turns a schedule into a persistent self-exfiltration
+    # channel that survives session revocation. Deliver to alternate
+    # addresses only behind an explicit email-verification flow.
+    if req.email.lower() != user.email.lower():
+        raise HTTPException(
+            status_code=403,
+            detail="report email must match your account email",
+        )
+
     sched = ScheduledReport(
         saved_search_id=saved.id,
         frequency=req.frequency,
