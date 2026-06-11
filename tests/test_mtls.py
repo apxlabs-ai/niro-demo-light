@@ -305,3 +305,13 @@ def test_mtls_ticket_by_id_cross_user_returns_403(client, demo_users):
         "AC-BUG-1: cross-user ticket access must be 403. "
         "If this returns 200 the BOLA is still present."
     )
+
+
+def test_mtls_agent_cannot_read_customer_ticket_by_id(client, demo_users):
+    """The customer mTLS ticket endpoint is owner-only, even for agents."""
+    _, _, _, ticket_alex, _ = demo_users
+    resp = client.get(
+        f"/mtls/tickets/{ticket_alex.id}",
+        headers={"X-Test-Cert-CN": "agent@helpdesk.example.com"},
+    )
+    assert resp.status_code == 403
