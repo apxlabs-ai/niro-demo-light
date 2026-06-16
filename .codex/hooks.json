@@ -1,0 +1,17 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "^Bash$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "niro hook --event=post-tool-use --agent=codex",
+            "timeout": 30,
+            "statusMessage": "Checking for open PR"
+          }
+        ]
+      }
+    ]
+  }
+}
