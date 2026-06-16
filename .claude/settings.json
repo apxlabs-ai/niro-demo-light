@@ -2,24 +2,13 @@
   "hooks": {
     "PostToolUse": [
       {
-        "matcher": "Bash",
         "hooks": [
           {
-            "type": "command",
-            "if": "Bash(git push *)",
-            "command": "niro hook --event=post-tool-use --agent=claude"
-          },
-          {
-            "type": "command",
-            "if": "Bash(gh pr create *)",
-            "command": "niro hook --event=post-tool-use --agent=claude"
-          },
-          {
-            "type": "command",
-            "if": "Bash(az repos pr create *)",
-            "command": "niro hook --event=post-tool-use --agent=claude"
+            "command": "niro hook --event=post-tool-use --agent=claude",
+            "type": "command"
           }
-        ]
+        ],
+        "matcher": "Bash"
       }
     ]
   }

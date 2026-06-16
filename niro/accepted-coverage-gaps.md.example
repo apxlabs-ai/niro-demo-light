@@ -1,0 +1,20 @@
+# Accepted Coverage Gaps
+
+Create `accepted-coverage-gaps.md` next to this file for specific
+coverage gaps you already know cannot be tested in this project setup.
+Niro will avoid re-reporting matching gaps on every run.
+
+Be specific. Broad entries can hide coverage gaps you did not intend to
+accept.
+
+Good examples:
+
+- Production-only SSO enforcement: Local and staging environments use password login, so SSO enforcement is not testable here.
+- Payment provider callbacks: Staging does not provide signed historical callbacks, so callback replay is not testable here.
+- Email delivery confirmation: The test environment captures outbound email metadata but not final inbox delivery events.
+
+Too broad; do not add entries like these:
+
+- Admin coverage is hard.
+- Webhooks are accepted.
+- Anything requiring credentials.
