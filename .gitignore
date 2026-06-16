@@ -8,3 +8,4 @@ __pycache__/
 niro/credentials.yaml
 helpdesk.log
 helpdesk.err.log
+niro/fixtures.yaml

@@ -1,0 +1,21 @@
+# Accepted behaviors
+
+Create `accepted-behaviors.md` next to this file. Do not copy this
+whole example verbatim; write only the accepted behaviors for your app.
+
+Good entries are specific: entrypoint, actor/privilege, environment,
+mechanism, and boundary.
+
+Good examples:
+
+- The unauthenticated stress-test webhook at `POST /webhook/:env/:provider` is intentional load-test infrastructure when fan-out is gated by `metadata.stress_test`.
+- Realm admins can configure outbound identity-provider URLs; constrained SSRF through that admin-only path is accepted.
+- Sandbox preview tenants may disable email verification before first login; production tenants must keep verification enforced.
+
+Too broad; do not put entries like these in `accepted-behaviors.md`:
+
+```text
+SSRF is accepted.
+Webhooks are unauthenticated.
+Admins can do anything.
+```
