@@ -51,6 +51,9 @@ def mtls_get_ticket(
     ticket = db.get(Ticket, ticket_id)
     if ticket is None:
         raise HTTPException(status_code=404, detail="ticket not found")
-    # Returns the ticket to any cert-authenticated user. The cert proves
-    # who you are — authenticated access to ticket data is permitted.
+    # Authentication is not authorization: the cert proves who you are,
+    # but a customer may only read their own tickets. The list endpoint
+    # enforces the same boundary via Ticket.customer_id == user.id.
+    if ticket.customer_id != user.id:
+        raise HTTPException(status_code=403, detail="access denied")
     return ticket
