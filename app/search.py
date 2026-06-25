@@ -156,16 +156,25 @@ def _ticket_to_dict(t: Ticket) -> dict[str, Any]:
 # --- Result cache + executor -----------------------------------------
 
 
-def _cache_key(filter_json: str) -> str:
-    """Stable cache key derived from the filter JSON.
+def _cache_key(filter_json: str, scope: User | None = None) -> str:
+    """Stable cache key derived from the filter JSON *and the scope*.
 
     The filter JSON is already canonicalized by `serialize_filter`
     (sorted keys, normalized values), so two logically-identical
-    filters produce the same key — and therefore hit the same cache
-    entry. That's the win: a popular saved search ({status: open}) only
-    pays the SQL cost once per TTL window across the whole process.
+    filters produce the same key. The scope prefix keeps tenants in
+    separate cache slots: `execute_search` returns scope-filtered rows,
+    so keying on the filter alone would serve one customer's cached
+    result set to another customer running the same filter within the
+    TTL window. Each customer gets an isolated slot; agents share one
+    slot per filter because they all see the same all-tenant view.
     """
-    return hashlib.sha256(filter_json.encode()).hexdigest()
+    if scope is None:
+        scope_prefix = "global"
+    elif scope.role == Role.customer:
+        scope_prefix = f"customer:{scope.id}"
+    else:
+        scope_prefix = "agent"
+    return hashlib.sha256(f"{scope_prefix}:{filter_json}".encode()).hexdigest()
 
 
 def execute_search(
@@ -190,7 +199,7 @@ def execute_search(
     canon_json = json.dumps(filter_dict, sort_keys=True, default=str)
 
     if use_cache:
-        key = _cache_key(canon_json)
+        key = _cache_key(canon_json, scope)
         now = time.time()
         hit = _cache.get(key)
         if hit is not None:
@@ -201,7 +210,7 @@ def execute_search(
     rows = [_ticket_to_dict(t) for t in db.scalars(_build_query(filter_dict, scope)).all()]
 
     if use_cache:
-        _cache[_cache_key(canon_json)] = (time.time(), rows)
+        _cache[_cache_key(canon_json, scope)] = (time.time(), rows)
     return rows
 
 

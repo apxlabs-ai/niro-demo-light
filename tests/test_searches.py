@@ -97,6 +97,57 @@ def client_as_alex(db, two_tenants):
     app.middleware_stack = None
 
 
+@pytest.fixture()
+def client_switchable(db, two_tenants):
+    """TestClient whose authenticated user can be switched mid-test via
+    ``c.act_as(user)`` — needed to exercise the shared in-process result
+    cache across two different tenants in one process."""
+    holder = {}
+    app.dependency_overrides[get_db] = lambda: db
+    app.dependency_overrides[current_user] = lambda: holder["user"]
+    with TestClient(app, raise_server_exceptions=True) as c:
+        c.act_as = lambda u: holder.__setitem__("user", u)
+        yield c
+    app.dependency_overrides.clear()
+    app.middleware_stack = None
+
+
+def test_result_cache_does_not_leak_across_tenants(client_switchable, two_tenants):
+    """REGRESSION (TC-CC4EEFA1): the in-process result cache must not
+    serve one tenant's rows to another.
+
+    Customer A runs an empty-filter search (populating the cache slot for
+    that filter), then Customer B runs an identical filter. On the unfixed
+    code the cache keys on filter JSON alone, so B is served A's cached
+    rows. B must see only B's tickets.
+    """
+    from app.search import invalidate_cache
+
+    alex, blair, a_tickets, b_tickets = two_tenants
+    invalidate_cache()  # controlled starting state
+
+    c = client_switchable
+
+    # Customer A primes the cache for filter {}.
+    c.act_as(alex)
+    sid_a = c.post("/searches", json={"name": "a", "filter": {}, "pinned": False}).json()["id"]
+    run_a = c.get(f"/searches/{sid_a}/run").json()
+    assert run_a["count"] == len(a_tickets)
+    assert {t["customer_id"] for t in run_a["tickets"]} == {alex.id}
+
+    # Customer B runs the identical filter — must NOT get A's cached rows.
+    c.act_as(blair)
+    sid_b = c.post("/searches", json={"name": "b", "filter": {}, "pinned": False}).json()["id"]
+    run_b = c.get(f"/searches/{sid_b}/run").json()
+    assert run_b["count"] == len(b_tickets), (
+        f"cache leaked across tenants: B got {run_b['count']} rows, "
+        f"expected {len(b_tickets)}"
+    )
+    assert {t["customer_id"] for t in run_b["tickets"]} == {blair.id}, (
+        "Customer B received another tenant's tickets from the result cache"
+    )
+
+
 def test_run_search_is_scoped_to_owner(client_as_alex, two_tenants):
     """Baseline (already correct): GET /run only returns the caller's tickets."""
     alex, blair, a_tickets, b_tickets = two_tenants
