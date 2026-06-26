@@ -33,7 +33,7 @@ the returned JWT as `Authorization: Bearer <token>` on subsequent requests.
 
 | Method | Path                            | Auth     | Notes                                |
 | ------ | ------------------------------- | -------- | ------------------------------------ |
-| POST   | `/auth/signup`                  | —        | Creates a customer                   |
+| POST   | `/auth/signup`                  | —        | Accepts a customer signup request    |
 | POST   | `/auth/login`                   | —        | Returns JWT                          |
 | GET    | `/me`                           | any user | Current user                         |
 | POST   | `/tickets`                      | any user | Customer files a ticket              |
