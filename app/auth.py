@@ -15,6 +15,9 @@ from .models import Role, User
 SECRET_KEY = os.environ.get("HELPDESK_SECRET", "dev-secret-do-not-use-in-prod")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_TTL_MINUTES = 60 * 24
+DUMMY_PASSWORD_HASH = (
+    "$2b$12$h9r4LfZ9rocu0lFrAb/3Tuspb.1MncVH79lVLWEzDv4YInD4PQRtW"
+)
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
 
