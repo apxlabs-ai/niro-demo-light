@@ -10,6 +10,7 @@ tree; `./feature/cleanup.sh` closes any open PRs the run produced.
 ## Run locally
 
 ```
+export HELPDESK_SECRET="$(openssl rand -hex 32)"
 ./start.sh           # macOS / Linux
 .\start.ps1          # Windows (PowerShell)
 ```

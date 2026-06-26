@@ -3,6 +3,10 @@
 $ErrorActionPreference = 'Stop'
 Set-Location -LiteralPath $PSScriptRoot
 
+if ([string]::IsNullOrWhiteSpace($env:HELPDESK_SECRET) -or $env:HELPDESK_SECRET -eq 'dev-secret-do-not-use-in-prod') {
+    throw 'HELPDESK_SECRET must be set to a non-placeholder JWT signing secret.'
+}
+
 # Find a usable Python. The Microsoft Store stub at
 # %LOCALAPPDATA%\Microsoft\WindowsApps\python.exe is not a real Python
 # - it prints a "not found" hint to stderr. Filter by requiring that

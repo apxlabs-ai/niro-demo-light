@@ -2,6 +2,12 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
+if [ -z "${HELPDESK_SECRET:-}" ] || [ "${HELPDESK_SECRET:-}" = "dev-secret-do-not-use-in-prod" ]; then
+  echo "HELPDESK_SECRET must be set to a non-placeholder JWT signing secret." >&2
+  echo "Example: export HELPDESK_SECRET=\"$(openssl rand -hex 32)\"" >&2
+  exit 1
+fi
+
 if [ ! -d .venv ]; then
   python3 -m venv .venv
 fi

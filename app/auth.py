@@ -12,7 +12,25 @@ from starlette.requests import Request
 from .db import get_db
 from .models import Role, User
 
-SECRET_KEY = os.environ.get("HELPDESK_SECRET", "dev-secret-do-not-use-in-prod")
+SECRET_ENV_VAR = "HELPDESK_SECRET"
+PLACEHOLDER_SECRET = "dev-secret-do-not-use-in-prod"
+MIN_SECRET_BYTES = 32
+
+
+def load_secret_key() -> str:
+    secret = os.environ.get(SECRET_ENV_VAR)
+    if not secret or secret == PLACEHOLDER_SECRET:
+        raise RuntimeError(
+            f"{SECRET_ENV_VAR} must be set to a non-placeholder JWT signing secret"
+        )
+    if len(secret.encode("utf-8")) < MIN_SECRET_BYTES:
+        raise RuntimeError(
+            f"{SECRET_ENV_VAR} must be at least {MIN_SECRET_BYTES} bytes"
+        )
+    return secret
+
+
+SECRET_KEY = load_secret_key()
 ALGORITHM = "HS256"
 ACCESS_TOKEN_TTL_MINUTES = 60 * 24
 
