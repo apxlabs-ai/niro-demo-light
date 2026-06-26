@@ -10,6 +10,13 @@ from ..schemas import SignupRequest, TokenResponse, UserOut
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
+# Precomputed bcrypt hash of a value no account uses. When the submitted email
+# is unknown we still verify the password against this dummy hash so the login
+# handler performs the same bcrypt work whether or not the account exists. This
+# closes the timing side channel that otherwise lets an unauthenticated caller
+# enumerate registered emails by measuring /auth/login response time.
+_DUMMY_PASSWORD_HASH = hash_password("niro-login-timing-dummy-password")
+
 
 @router.post("/signup", response_model=UserOut, status_code=201)
 def signup(req: SignupRequest, db: Session = Depends(get_db)):
@@ -32,7 +39,13 @@ def login(
     db: Session = Depends(get_db),
 ):
     user = db.scalar(select(User).where(User.email == form.username))
-    if not user or not verify_password(form.password, user.password_hash):
+    # Always run bcrypt — against the real hash if the account exists, otherwise
+    # against a constant dummy hash — so an unknown email costs the same wall
+    # time as a known one. Without this, Python's `or` short-circuits past
+    # verify_password for unknown emails, leaking account existence via timing.
+    password_hash = user.password_hash if user else _DUMMY_PASSWORD_HASH
+    password_ok = verify_password(form.password, password_hash)
+    if not user or not password_ok:
         raise HTTPException(status_code=401, detail="invalid credentials")
     return TokenResponse(access_token=issue_token(user))
 
