@@ -44,13 +44,14 @@ def mtls_get_ticket(
     user: User = Depends(current_user_mtls),
     db: Session = Depends(get_db),
 ):
-    """Return a single ticket by ID for a cert-authenticated caller.
+    """Return a single ticket by ID for the cert-authenticated owner.
 
-    Note: verifies the caller holds a valid client certificate.
+    Verifies the caller holds a valid client certificate AND owns the
+    requested ticket; cross-owner reads are denied.
     """
     ticket = db.get(Ticket, ticket_id)
     if ticket is None:
         raise HTTPException(status_code=404, detail="ticket not found")
-    # Returns the ticket to any cert-authenticated user. The cert proves
-    # who you are — authenticated access to ticket data is permitted.
+    if ticket.customer_id != user.id:
+        raise HTTPException(status_code=403, detail="forbidden")
     return ticket
