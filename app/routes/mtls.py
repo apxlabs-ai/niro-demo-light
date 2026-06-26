@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from ..auth import current_user_mtls
 from ..db import get_db
 from ..models import Ticket, User
+from ..routes.tickets import TicketIdPath
 from ..schemas import TicketOut, UserOut
 
 router = APIRouter(prefix="/mtls", tags=["mtls"])
@@ -40,7 +41,7 @@ def mtls_list_tickets(
 
 @router.get("/tickets/{ticket_id}", response_model=TicketOut)
 def mtls_get_ticket(
-    ticket_id: int,
+    ticket_id: TicketIdPath,
     user: User = Depends(current_user_mtls),
     db: Session = Depends(get_db),
 ):
