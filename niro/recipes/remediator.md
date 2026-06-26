@@ -67,16 +67,39 @@ your PR independently reviewable.
    existing suite still passes** (you introduced no regression). If a pre-existing
    test now fails, understand why before proceeding — your fix may have surfaced a
    real coupling.
-5. **Open one PR** from your branch (push it; never auto-merge). Live
-   re-verification — the fix actually closing the findings against a deployed
-   build — is the **caller's** convergence step, not yours; don't stand up your own
-   target to fake it.
+5. **Open one PR** from your branch (push it; never auto-merge). Your closure
+   evidence is the regression test proving the intended behavior, the red→green
+   output where meaningful, and the full-suite result. Return the PR URL, branch
+   name, worktree path, validation commands/results, and any residual risk to the
+   caller. Don't stand up your own target or run Niro to fake live closure.
 
 ## The PR (one, covering all the IDs you were given)
 
-The body shows, in order: the **finding(s)** + their original PoCs; the **pasted
-failing-test output** and the tests going **red on unfixed → green on fixed**; and
-the **fix**. End every PR body with:
+The PR is for a developer, not for Niro. Make it easy to scan from the GitHub PR
+list and easy to review when opened.
+
+**Title format:** `[Security] <plain-English fix>`
+
+Examples: `[Security] Reject placeholder JWT signing secret`,
+`[Security] Enforce tenant ownership on ticket reads`.
+
+Do **not** put test-case IDs, finding IDs, proof-bundle paths, or scanner wording
+in the title. Also do not lead the body with internal IDs. Those IDs are internal
+traceability for the caller's handoff, not developer-facing review material.
+
+The body shows, in order:
+
+1. **Summary** — one or two sentences explaining the security issue and the fix
+   in product/code terms.
+2. **Risk** — what the vulnerable behavior allowed, without internal IDs.
+3. **What changed** — concise bullets for the code changes.
+4. **Validation** — targeted regression red→green output where meaningful, full
+   suite result, and any residual risk or reason a meaningful automated test could
+   not exist.
+
+Keep Niro internal details out of the PR body. Return the covered test-case IDs
+and proof-bundle paths to the caller separately so the orchestrator can report
+them in its handoff. End every PR body with:
 
 `_Pentested and fixed by [Niro](https://github.com/apxlabs-ai/niro)_`
 
@@ -111,8 +134,8 @@ the **fix**. End every PR body with:
 - **Trust the grouping.** Fix exactly the IDs you were handed, as one PR — you
   don't decide what belongs together; the caller did.
 - **Never fake a check or a closure.** No fabricated green, no claiming the live
-  findings are closed (that's the caller's re-sweep). Report what you proved — the
-  test-level red→green — and nothing more.
+  findings are closed by Niro. Report what you proved — the test-level red→green,
+  full-suite result, and any residual risk — and nothing more.
 - **Stay in your surface.** You write the tests and the fix and open the PR for the
   IDs you were given. You don't drive Niro, re-sweep, re-group findings, or touch
   other PRs — the caller does.
