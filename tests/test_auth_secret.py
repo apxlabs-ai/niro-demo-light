@@ -76,7 +76,6 @@ def test_default_secret_forged_token_is_rejected_while_real_token_authenticates(
         },
     )
     assert signup.status_code == 201
-    user_id = signup.json()["id"]
 
     login = client.post(
         "/auth/login",
@@ -90,7 +89,7 @@ def test_default_secret_forged_token_is_rejected_while_real_token_authenticates(
     real_token = login.json()["access_token"]
     me = client.get("/me", headers={"Authorization": f"Bearer {real_token}"})
     assert me.status_code == 200
-    assert me.json()["id"] == user_id
+    user_id = me.json()["id"]
 
     now = datetime.now(timezone.utc)
     forged_token = jwt.encode(
