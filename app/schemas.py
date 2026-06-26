@@ -7,7 +7,10 @@ from .models import Priority, Role, Status
 
 class SignupRequest(BaseModel):
     email: EmailStr
-    password: str = Field(min_length=8, max_length=128)
+    # bcrypt only consumes the first 72 bytes of a password and raises beyond
+    # that; cap the schema at 72 so over-length input is rejected cleanly (422)
+    # rather than reaching the hasher.
+    password: str = Field(min_length=8, max_length=72)
     full_name: str = Field(min_length=1, max_length=200)
 
 
@@ -27,7 +30,7 @@ class UserOut(BaseModel):
 
 class TicketCreate(BaseModel):
     subject: str = Field(min_length=1, max_length=200)
-    description: str = Field(min_length=1)
+    description: str = Field(min_length=1, max_length=10000)
     priority: Priority = Priority.normal
 
 

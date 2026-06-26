@@ -19,13 +19,25 @@ ACCESS_TOKEN_TTL_MINUTES = 60 * 24
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
 
 
+# bcrypt only ever consumes the first 72 bytes of the input and raises
+# ValueError for anything longer. A multibyte password can be within a sane
+# character limit yet exceed 72 bytes, so we truncate the encoded bytes to 72
+# before hashing/verifying. This makes the helpers total — they can never raise
+# on over-length input — so no signup request can turn into an uncaught 500.
+_BCRYPT_MAX_BYTES = 72
+
+
+def _bcrypt_bytes(plain: str) -> bytes:
+    return plain.encode("utf-8")[:_BCRYPT_MAX_BYTES]
+
+
 def hash_password(plain: str) -> str:
-    return bcrypt.hashpw(plain.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+    return bcrypt.hashpw(_bcrypt_bytes(plain), bcrypt.gensalt()).decode("utf-8")
 
 
 def verify_password(plain: str, hashed: str) -> bool:
     try:
-        return bcrypt.checkpw(plain.encode("utf-8"), hashed.encode("utf-8"))
+        return bcrypt.checkpw(_bcrypt_bytes(plain), hashed.encode("utf-8"))
     except ValueError:
         return False
 
