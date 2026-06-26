@@ -36,8 +36,8 @@ credentials:
       {access_token, token_type:bearer}; send the token on subsequent
       calls as `Authorization: Bearer <token>`. Owns the customer A
       fixtures in niro/fixtures.yaml; pair with customer B to verify
-      cross-customer ticket, comment, saved-search, schedule, and run
-      isolation.
+      cross-customer ticket and comment isolation
+      (GET/PATCH /tickets/{id}, /tickets/{id}/comments).
     type: username_password
     identifier: alex@customer.test
     secret: customer-pass-1234
@@ -52,9 +52,10 @@ credentials:
 
   - description: |
       Helpdesk agent (elevated role). Login: same shape as the customers.
-      Agents are expected to read and update tickets/searches across
-      customers and access agent-only analytics at GET /searches/_stats;
-      customers must not reach agent-only surfaces.
+      Agents are expected to read and update tickets across all
+      customers (GET /tickets sees every ticket; PATCH /tickets/{id} sets
+      status/priority/assignee). Customers must not reach these
+      agent-only capabilities.
     type: username_password
     identifier: agent@helpdesk.test
     secret: agent-pass-1234

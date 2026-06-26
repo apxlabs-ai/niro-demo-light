@@ -1,17 +1,21 @@
 #!/usr/bin/env python3
 """Generate deterministic Niro fixtures from the local helpdesk DB.
 
-The repo's documented seed.py creates the README users. This generator builds
-the cross-customer data Niro needs around those users and emits
-niro/fixtures.yaml. The generated YAML is local-only; this script is the
-committed rebuild primitive.
+The repo's documented seed.py creates the README users (agent, alex, blair).
+This generator builds the cross-customer data Niro needs around those users —
+tickets and comments OWNED BY DIFFERENT CUSTOMERS — and emits
+niro/fixtures.yaml so horizontal-authorization tests (IDOR / cross-tenant)
+have distinct cross-owner objects to reach.
+
+It targets the current working-tree surface (tickets + comments + mTLS); it
+does NOT assume the saved-search / scheduled-report feature. The generated
+YAML is local-only; this script is the committed rebuild primitive.
 """
 from __future__ import annotations
 
 import json
 import os
 import sys
-from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -23,18 +27,13 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from app.db import Base, SessionLocal, engine  # noqa: E402
-from app.jobs import run_scheduled_report  # noqa: E402
 from app.models import (  # noqa: E402
     Comment,
     Priority,
-    ReportFrequency,
-    SavedSearch,
-    ScheduledReport,
     Status,
     Ticket,
     User,
 )
-from app.search import serialize_filter  # noqa: E402
 from seed import main as seed_users  # noqa: E402
 
 OUT = CONFIG_DIR / "fixtures.yaml"
@@ -49,12 +48,8 @@ def _user(db, email: str) -> User:
 
 
 def _clear_prior_fixtures(db) -> None:
-    for saved in db.scalars(
-        select(SavedSearch).where(SavedSearch.name.like(f"{FIXTURE_TAG}%"))
-    ).all():
-        db.delete(saved)
-    db.flush()
-
+    # Deleting tagged tickets cascades to their comments
+    # (Ticket.comments uses cascade="all, delete-orphan").
     for ticket in db.scalars(
         select(Ticket).where(Ticket.subject.like(f"{FIXTURE_TAG}%"))
     ).all():
@@ -99,23 +94,15 @@ def _ticket(
     return ticket
 
 
-def _saved_search(
-    db,
-    *,
-    owner: User,
-    name: str,
-    filter_data: dict[str, Any],
-    pinned: bool = False,
-) -> SavedSearch:
-    saved = SavedSearch(
-        owner_id=owner.id,
-        name=f"{FIXTURE_TAG} {name}",
-        filter_json=serialize_filter(filter_data),
-        pinned=pinned,
-    )
-    db.add(saved)
-    db.flush()
-    return saved
+def _comment_ids(db, ticket_id: int) -> list[int]:
+    return [
+        c.id
+        for c in db.scalars(
+            select(Comment)
+            .where(Comment.ticket_id == ticket_id)
+            .order_by(Comment.id.asc())
+        ).all()
+    ]
 
 
 def _yaml_scalar(value: Any) -> str:
@@ -199,66 +186,20 @@ def main() -> None:
             priority=Priority.high,
             status=Status.in_progress,
         )
-
-        alex_search = _saved_search(
-            db,
-            owner=alex,
-            name="customer A urgent tickets",
-            filter_data={"customer_id": alex.id, "priority": Priority.urgent.value},
-            pinned=True,
-        )
-        blair_search = _saved_search(
-            db,
-            owner=blair,
-            name="customer B active tickets",
-            filter_data={
-                "customer_id": blair.id,
-                "status": Status.in_progress.value,
-            },
-            pinned=True,
-        )
-        agent_search = _saved_search(
-            db,
-            owner=agent,
-            name="agent all high priority",
-            filter_data={"priority": Priority.high.value},
-            pinned=False,
-        )
-
-        alex_schedule = ScheduledReport(
-            saved_search_id=alex_search.id,
-            frequency=ReportFrequency.daily,
-            email="alex-reports@customer.test",
-            next_run_at=datetime.now(UTC).replace(tzinfo=None) - timedelta(minutes=5),
-        )
-        db.add(alex_schedule)
         db.commit()
-        db.refresh(alex_schedule)
-        alex_run = run_scheduled_report(alex_schedule.id, db)
+        db.refresh(alex_ticket)
+        db.refresh(blair_ticket)
 
-        alex_comment_ids = [
-            c.id
-            for c in db.scalars(
-                select(Comment)
-                .where(Comment.ticket_id == alex_ticket.id)
-                .order_by(Comment.id.asc())
-            ).all()
-        ]
-        blair_comment_ids = [
-            c.id
-            for c in db.scalars(
-                select(Comment)
-                .where(Comment.ticket_id == blair_ticket.id)
-                .order_by(Comment.id.asc())
-            ).all()
-        ]
+        alex_comment_ids = _comment_ids(db, alex_ticket.id)
+        blair_comment_ids = _comment_ids(db, blair_ticket.id)
 
         fixtures = [
             {
                 "name": "seeded_actor_ids",
                 "description": (
                     "README seeded users present in this boot. Use for role "
-                    "and identity-aware authorization checks."
+                    "and identity-aware authorization checks (also the CN on "
+                    "each user's mTLS client cert for port 8443)."
                 ),
                 "value": {
                     "agent": {"id": agent.id, "email": agent.email, "role": agent.role.value},
@@ -269,9 +210,14 @@ def main() -> None:
             {
                 "name": "cross_customer_ticket_pair",
                 "description": (
-                    "Different customer-owned tickets. Customer A owns only "
+                    "Different customer-owned tickets, each with a customer "
+                    "comment and an agent comment. Customer A owns only "
                     "customer_a_ticket_id; customer B owns only "
-                    "customer_b_ticket_id; the agent may access both."
+                    "customer_b_ticket_id; the agent may access both. Use the "
+                    "opposite customer's ticket/comment id as the cross-owner "
+                    "target for IDOR / horizontal-escalation attempts on "
+                    "/tickets/{id}, /tickets/{id}/comments, and the mTLS "
+                    "/mtls/tickets/{id} surface."
                 ),
                 "value": {
                     "customer_a_ticket_id": alex_ticket.id,
@@ -279,34 +225,6 @@ def main() -> None:
                     "customer_b_ticket_id": blair_ticket.id,
                     "customer_b_comment_ids": blair_comment_ids,
                     "agent_assignee_id": agent.id,
-                },
-            },
-            {
-                "name": "saved_search_pair",
-                "description": (
-                    "Different customer-owned saved searches plus an agent "
-                    "search. Customers should not access another customer's "
-                    "search or schedule surfaces."
-                ),
-                "value": {
-                    "customer_a_search_id": alex_search.id,
-                    "customer_b_search_id": blair_search.id,
-                    "agent_search_id": agent_search.id,
-                },
-            },
-            {
-                "name": "customer_a_scheduled_report",
-                "description": (
-                    "Customer A recurring report with an initial run. Use "
-                    "schedule_id and run_id for schedule/run-history "
-                    "authorization checks."
-                ),
-                "value": {
-                    "schedule_id": alex_schedule.id,
-                    "saved_search_id": alex_search.id,
-                    "initial_run_id": alex_run.id,
-                    "recipient": alex_schedule.email,
-                    "frequency": alex_schedule.frequency.value,
                 },
             },
         ]
