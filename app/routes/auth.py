@@ -1,29 +1,30 @@
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..auth import current_user, hash_password, issue_token, verify_password
 from ..db import get_db
 from ..models import User
-from ..schemas import SignupRequest, TokenResponse, UserOut
+from ..schemas import SignupRequest, SignupResponse, TokenResponse, UserOut
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 
-@router.post("/signup", response_model=UserOut, status_code=201)
+@router.post("/signup", response_model=SignupResponse, status_code=201)
 def signup(req: SignupRequest, db: Session = Depends(get_db)):
-    if db.scalar(select(User).where(User.email == req.email)):
-        raise HTTPException(status_code=409, detail="email already registered")
     user = User(
         email=req.email,
         password_hash=hash_password(req.password),
         full_name=req.full_name,
     )
     db.add(user)
-    db.commit()
-    db.refresh(user)
-    return user
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+    return SignupResponse()
 
 
 @router.post("/login", response_model=TokenResponse)
