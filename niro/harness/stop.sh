@@ -14,10 +14,12 @@ else
   python3 "$CONFIG_DIR/harness/serve.py" stop
 fi
 
-if lsof -ti tcp:8000 >/dev/null 2>&1; then
-  pids="$(lsof -ti tcp:8000)"
-  echo "$pids" | xargs kill
-  echo "stopped pid(s) on port 8000: $(echo "$pids" | tr '\n' ' ')"
-else
-  echo "nothing listening on port 8000"
-fi
+for port in 8000 8443; do
+  if lsof -ti tcp:"$port" >/dev/null 2>&1; then
+    pids="$(lsof -ti tcp:"$port")"
+    echo "$pids" | xargs kill
+    echo "stopped pid(s) on port $port: $(echo "$pids" | tr '\n' ' ')"
+  else
+    echo "nothing listening on port $port"
+  fi
+done

@@ -17,8 +17,14 @@ mkdir -p "$OUT"
 # CA
 # ---------------------------------------------------------------------------
 openssl genrsa -out "$OUT/ca.key" 2048 2>/dev/null
+# Mark the CA explicitly (basicConstraints + keyUsage). Strict TLS verifiers
+# (Python's ssl, and other non-curl clients) reject a trust anchor that lacks
+# these extensions ("CA cert does not include key usage extension"), so they
+# are required for the chain to verify, not just cosmetic.
 openssl req -new -x509 -days 3650 -key "$OUT/ca.key" -out "$OUT/ca.crt" \
-  -subj "/CN=niro-demo-CA/O=niro-demo" 2>/dev/null
+  -subj "/CN=niro-demo-CA/O=niro-demo" \
+  -addext "basicConstraints=critical,CA:TRUE" \
+  -addext "keyUsage=critical,keyCertSign,cRLSign" 2>/dev/null
 echo "→ CA: $OUT/ca.crt"
 
 # ---------------------------------------------------------------------------
@@ -29,7 +35,7 @@ openssl req -new -key "$OUT/server.key" -out "$OUT/server.csr" \
   -subj "/CN=localhost/O=niro-demo" 2>/dev/null
 openssl x509 -req -days 3650 -in "$OUT/server.csr" -CA "$OUT/ca.crt" \
   -CAkey "$OUT/ca.key" -CAcreateserial -out "$OUT/server.crt" \
-  -extfile <(printf "subjectAltName=DNS:localhost,IP:127.0.0.1") 2>/dev/null
+  -extfile <(printf "subjectAltName=DNS:localhost,IP:127.0.0.1\nbasicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth") 2>/dev/null
 rm "$OUT/server.csr"
 echo "→ server: $OUT/server.crt"
 
@@ -43,7 +49,8 @@ _client_cert() {
     -subj "/CN=${cn}/O=niro-demo" 2>/dev/null
   openssl x509 -req -days 3650 -in "$OUT/client-${name}.csr" \
     -CA "$OUT/ca.crt" -CAkey "$OUT/ca.key" -CAcreateserial \
-    -out "$OUT/client-${name}.crt" 2>/dev/null
+    -out "$OUT/client-${name}.crt" \
+    -extfile <(printf "basicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature\nextendedKeyUsage=clientAuth") 2>/dev/null
   rm "$OUT/client-${name}.csr"
   echo "→ client cert for ${cn}: $OUT/client-${name}.crt"
 }

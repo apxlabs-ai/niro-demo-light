@@ -37,9 +37,11 @@ if [ -x "$PYTHON" ]; then
 else
   python3 "$CONFIG_DIR/harness/serve.py" stop
 fi
-if lsof -ti tcp:8000 >/dev/null 2>&1; then
-  lsof -ti tcp:8000 | xargs kill
-fi
+for port in 8000 8443; do
+  if lsof -ti tcp:"$port" >/dev/null 2>&1; then
+    lsof -ti tcp:"$port" | xargs kill
+  fi
+done
 
 cd "$PROJECT_ROOT"
 if [ ! -d .venv ]; then
