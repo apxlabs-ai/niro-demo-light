@@ -34,19 +34,27 @@ credentials:
       Standard customer A. Login: POST /auth/login with form-encoded
       `username` (email) and `password`; response is
       {access_token, token_type:bearer}; send the token on subsequent
-      calls as `Authorization: Bearer <token>`.
+      calls as `Authorization: Bearer <token>`. Owns the customer A
+      fixtures in niro/fixtures.yaml; pair with customer B to verify
+      cross-customer ticket, comment, saved-search, schedule, and run
+      isolation.
     type: username_password
     identifier: alex@customer.test
     secret: customer-pass-1234
 
   - description: |
-      Standard customer B. Login: same shape as customer A.
+      Standard customer B. Login: same shape as customer A. Owns the
+      customer B fixtures in niro/fixtures.yaml; pair with customer A
+      for horizontal authorization tests.
     type: username_password
     identifier: blair@customer.test
     secret: customer-pass-1234
 
   - description: |
       Helpdesk agent (elevated role). Login: same shape as the customers.
+      Agents are expected to read and update tickets/searches across
+      customers and access agent-only analytics at GET /searches/_stats;
+      customers must not reach agent-only surfaces.
     type: username_password
     identifier: agent@helpdesk.test
     secret: agent-pass-1234

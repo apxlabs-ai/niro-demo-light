@@ -9,3 +9,10 @@ niro/credentials.yaml
 helpdesk.log
 helpdesk.err.log
 niro/fixtures.yaml
+niro/findings/
+niro/harness/run/
+/.idea/.gitignore
+/.idea/misc.xml
+/.idea/modules.xml
+/.idea/niro-demo-light.iml
+/.idea/vcs.xml

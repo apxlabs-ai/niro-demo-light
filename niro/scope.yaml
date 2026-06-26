@@ -68,3 +68,4 @@
 targets:
   - target: "localhost:8000"
   - target: "localhost:8443"  # mTLS-gated: full app behind TLS CERT_REQUIRED=2
+  - target: "192.168.65.254:8000"
