@@ -19,9 +19,9 @@ only one who sees the whole exercise at once.
   the evaluation on-ramp: it answers *"is it easy?"* and *"does it find real
   issues I'd fix?"* — and both are answered by findings, not PRs.
 - **`remediate`** — take the verified findings from an assess run and turn each
-  root-cause cluster into a **review-ready fix PR**, then converge (re-sweep until
-  the fixes are confirmed). The heavy, write-the-repo half — entered only when the
-  caller opts in.
+  root-cause cluster into a **review-ready fix PR** with best-effort regression
+  tests and full-suite evidence, then stop. No PR-mode pentest or re-sweep follows
+  the PRs. The heavy, write-the-repo half — entered only when the caller opts in.
 
 `assess` **never writes to the app or opens PRs.** `remediate` assumes `assess`
 already ran in the **same live session** — its findings, verdicts, and proof
@@ -87,62 +87,82 @@ proof lives — plus any non-reproducible findings (with attempted repro + reaso
 and a pointer to `accepted-coverage-gaps.yaml`. **Leave the session open** so a
 later `remediate` can reuse it.
 
-## `remediate` — clusters into PRs, then converge
+## `remediate` — clusters into PRs, then stop
 
-Run this as a **convergence loop toward a fixed point**: done when **every
-previously-`FAILED` finding has been re-verified `PASSED`** and **a fresh sweep
-surfaces nothing new**. "No findings" never means "secure" — only "this pass found
-nothing new."
+Run this as a **PR-production workflow**, not a re-sweep loop. Done means each
+cluster has a review-ready PR (or patch fallback) with best-effort regression
+tests that prove the intended behavior, red→green evidence where meaningful, and
+full-suite results. Do **not** run a Niro PR-mode pentest after opening the PRs,
+and do **not** claim the live findings are closed by Niro.
 
 1. **Take the verified clusters** from the assess run — the **same live session**.
    If that session is gone (closed, or idled out, so its findings and proof
    bundles no longer exist), **don't silently start a blind fresh sweep** that
    throws away the verification — stop, say so, and re-run `assess` first (or ask).
-2. **Fan off one niro-remediator per cluster** — hand each just the niro config dir and
-   its cluster's **test-case IDs**. Each niro-remediator cuts its **own git worktree off
-   the default branch** and returns one branch + PR; that isolation lets clusters
-   be fixed **in parallel** with no collision.
-3. **Rebuild with the fixes and re-sweep.** Combine the fix branches into a
-   **throwaway integration branch**, have the niro-harness-operator serve it, and
-   re-sweep (`mode=pr`) — only this re-verdict (`FAILED→PASSED`) retires a finding;
-   a green local PoC is **not** proof the live vulnerability is gone. **If a fix
-   branch won't merge cleanly, drop it from this integration sweep — never
-   hand-resolve a conflict** — and re-sweep the branches that did merge; the
-   dropped branch keeps its open PR and is retried next loop. (A branch that
-   *keeps* conflicting is a grouping miss — its files overlap another cluster's; it
-   should be re-grouped into that PR, or flagged in the handoff — not resolved by
-   hand.) Feed any new reproducible findings back through verify → cluster →
-   remediate.
+2. **Choose the remediation shape, then delegate.** For small/medium batches
+   (roughly 1-3 clusters, or clusters near the same subsystem), prefer serial
+   dispatch so the fixes stay coherent while preserving one cluster → one PR. Use
+   parallel niro-remediators only for large, clearly independent clusters. Hand
+   each niro-remediator just the niro config dir and its cluster's **test-case
+   IDs**. Each niro-remediator cuts its **own git worktree off the default
+   branch** and returns one branch + PR.
+3. **Check combined PR compatibility, not live security closure.** If multiple
+   PRs were produced, combine the fix branches in a **throwaway integration
+   branch/worktree** and run the project's full suite. Do not open a PR from this
+   branch. If a branch won't merge cleanly, or the combined suite fails, fix the
+   relevant PR branch when the cause is clear; otherwise report the incompatibility
+   plainly in the handoff. A branch that keeps conflicting is a grouping miss —
+   its files overlap another cluster's; regroup it into that PR, or flag the
+   overlap.
 
-**Stop** when every prior finding reads `PASSED` **and** a sweep surfaces nothing
-new — **or** after **3 sweeps total** (initial + at most 2 re-sweeps). If the cap
-is hit with findings outstanding, **say so plainly** — *"reached the 3-sweep cap;
-not converged; N findings still outstanding"* — never imply the app is clean.
-Report the outcome as *"no new findings in the final pass,"* never *"secure."*
-Then, as the **final cleanup**, close the session.
+**Stop** when the PRs or patch files are ready and the verification handoff is
+complete: covered test-case IDs, proof bundles, red→green regression evidence (or
+an explicit reason no meaningful test exists), full-suite results per PR branch,
+combined-suite results when there are multiple PRs, residual risks, and where the
+user can find each branch/worktree. Say plainly that no post-PR Niro pentest was
+run and that live Niro findings were not re-verified closed. Then, as the **final
+cleanup**, close the session.
 
 ### Clustering and PRs (remediate)
 
 **Clustering is yours alone** — you are the only context that sees every TP at
 once (you do it in `assess`; `remediate` acts on it). Group TPs by **shared root
-cause** (one unsafe SQL-builder used by many endpoints is **one** fix, not N).
-Also merge any two clusters that would **edit the same file** — their PRs would
-entangle, so they become one PR (say why).
+cause** and **review boundary**: each cluster should become one coherent,
+reviewable PR whose cause, fix, regression tests, and risk tradeoff a developer
+can understand and accept or reject as a unit. One unsafe SQL-builder used by
+many endpoints is **one** fix, not N; unrelated bugs in the same endpoint are
+separate unless their fixes would entangle review. Also merge any two clusters
+that would **edit the same file** — their PRs would entangle, so they become one
+PR (say why).
 
 - **One cluster → one PR.** Hand each niro-remediator exactly one cluster's TC-IDs and
   it returns one branch/PR (it owns the worktree/branch mechanics — cut from the
   default branch, never stacked). Your job is the **grouping**: each TC belongs to
   exactly one cluster, and clusters that would edit the same file are merged.
+- **Every TP needs durable evidence.** Do not accept a remediation PR as complete
+  unless every covered true positive has a regression test that fails red on the
+  unfixed code and passes green after the fix, or an explicit reason no meaningful
+  automated test can exist plus the strongest reproducible evidence available.
+- **PRs are developer-facing review artifacts.** Require titles like
+  `[Security] <plain-English fix>`, and make the visible body read like a
+  human security fix: summary, risk, what changed, validation. Do not put
+  test-case IDs, finding IDs, or proof-bundle paths in the PR title or visible PR
+  body; keep those internal details in your handoff.
 - **Judgment calls become draft PRs**, not side reports — crypto cost, whether an
   endpoint should be public, rate-limit thresholds. State the tradeoff and a
   recommended default; the human decides by merging or closing.
-- **The integration branch is throwaway scaffolding for the re-sweep only** —
-  never open a PR from it. The per-cluster PRs stay the review units.
+- **The integration branch is throwaway scaffolding for combined-suite testing
+  only** — never open a PR from it. The per-cluster PRs stay the review units.
+- **Use worktrees intentionally and explain them.** The original checkout keeps
+  Niro config/session artifacts; PR worktrees hold branch-specific fixes; the
+  optional integration worktree holds merged PR branches for testing only. Tell
+  the user the branch and worktree path for every PR, and make clear that the
+  integration worktree is not the review unit.
 
 ## Who does the work (you conduct; specialists execute)
 
 You own every Niro-specific decision and the cross-cutting judgment (clustering,
-deployment severity, convergence). You delegate everything that is cleaner in an
+deployment severity, remediation handoff). You delegate everything that is cleaner in an
 isolated context — and a verifier **must** be a separate context from whatever
 produced the findings.
 
@@ -155,7 +175,7 @@ its output — lives in its recipe, not here.
 |---|---|---|---|
 | **niro-harness-operator** | config dir + a desired-state instruction | running target; `scope` / `credentials` / `fixtures` / `accepted-coverage-gaps` written under the config dir | the verifier (right actors + data) |
 | **niro-finding-verifier** | config dir + `findings/<TC-ID>/finding.json` — the **raw Niro finding, which YOU seed** — one finding per call | a verdict: **TP** → `poc.<ext>` + `run.sh`/`run.ps1`; **accepted** → an `accepted-behaviors.yaml` entry; **FP** → a report, no bundle | the remediator (TP bundles) |
-| **niro-remediator** | config dir + one cluster's **test-case IDs** (each dir already holds `finding.json` + `poc`) | one branch + PR with a regression test | the `mode=pr` re-sweep |
+| **niro-remediator** | config dir + one cluster's **test-case IDs** (each dir already holds `finding.json` + `poc`) | one branch + PR with regression evidence | your remediation handoff and, if needed, the combined-suite integration check |
 
 **You seed `finding.json` — it is your job, not the verifier's.** Before
 dispatching a verifier, write the raw `get_test_case_detail` output to
@@ -170,8 +190,9 @@ The verifier judges; **you** settle each verdict — but **risk acceptance is no
 yours, or Niro's, to make.** Accepting a finding is a human decision that lives in
 the customer's version-controlled `accepted-behaviors.yaml`, outside Niro.
 
-- **TP** → in `assess`, leave it open (proven, unfixed); in `remediate`, fix it.
-  The fix is retired only when a `mode=pr` re-sweep flips it `FAILED→PASSED`.
+- **TP** → in `assess`, leave it open (proven, unfixed); in `remediate`, fix it
+  and report the test-backed PR as remediation evidence. Do not mark the live Niro
+  finding closed unless a human separately asks for a later validation run.
 - **accepted** → **do nothing in Niro — leave the finding open**, exactly like a
   TP. The verifier already wrote the `accepted-behaviors.yaml` entry (consequence +
   evidence); that register, reviewed by the human, is the record. **Never call
@@ -188,9 +209,9 @@ the customer's version-controlled `accepted-behaviors.yaml`, outside Niro.
   `remediate` can reuse the findings; close only as the final cleanup (after
   `remediate`, or when an assess-only run is explicitly finished). Closing (or
   letting the container idle out) drops the in-memory findings.
-- **Every sweep starts from a clean baseline.** Before each sweep (initial or
-  re-sweep), have the niro-harness-operator give you a clean seeded baseline —
-  otherwise a prior sweep's residue bleeds into the re-run and can **forge
+- **Every assessment sweep starts from a clean baseline.** Before each assessment
+  sweep, have the niro-harness-operator give you a clean seeded baseline —
+  otherwise a prior sweep's residue bleeds into the run and can **forge
   cross-tenant false positives**. You own the *trigger*, not the how: state the
   intent and let the operator reconcile it (how it restores state is its contract,
   not yours); never reset state yourself — app writes are off-limits in `assess`.
@@ -212,11 +233,10 @@ the customer's version-controlled `accepted-behaviors.yaml`, outside Niro.
   never call `manage_finding(accept)` or `(revoke)`. Leave accepted findings open
   like TPs; the verifier's register entry, reviewed by the human, is the record.
   And never write the human's `reason` in that file — that's theirs.
-- **A finding closes only on Niro's re-verdict.** `FAILED→PASSED` on a `mode=pr`
-  re-sweep retires it — not your local PoC re-run. Convergence needs **both**
-  halves: every prior finding `PASSED` *and* a sweep with nothing new.
-- **Cap `remediate` at 3 sweeps**, and if the cap hits with findings outstanding,
-  state "not converged; N outstanding." Never imply clean or secure.
+- **Remediation does not auto-close live findings.** Regression tests and suite
+  results are remediation evidence, not a Niro closure verdict. Report exactly
+  what was proved: red→green tests, full suite, integration suite if multiple PRs,
+  residual risks, and that no post-PR pentest was run.
 
 ## Useful priors (know-how, not a checklist)
 
@@ -235,9 +255,10 @@ the customer's version-controlled `accepted-behaviors.yaml`, outside Niro.
 - **Coverage gaps are harness instructions, mostly.** Feature-flag gated, empty
   fixture, missing credential → hand back to the niro-harness-operator and re-run. Only
   licensed-build / external-infra / prod-only behavior is documented and accepted.
-- **A re-sweep can expose new surface.** Closing a blocking bug can make
-  previously-unreachable surface testable — that's why `remediate` converges, not
-  one-shots.
+- **Regression tests are the durable remediation evidence.** They live with the
+  code, fail on the vulnerable behavior, and keep protecting the project after
+  review changes. When a finding cannot get a meaningful automated regression
+  test, say why and provide the strongest reproducible evidence you can.
 
 ## Stop-and-ask (fail fast — one specific question)
 

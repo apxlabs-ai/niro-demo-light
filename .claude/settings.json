@@ -2,13 +2,13 @@
   "hooks": {
     "PostToolUse": [
       {
+        "matcher": "Bash",
         "hooks": [
           {
-            "command": "niro hook --event=post-tool-use --agent=claude",
-            "type": "command"
+            "type": "command",
+            "command": "niro hook --event=post-tool-use --agent=claude"
           }
-        ],
-        "matcher": "Bash"
+        ]
       }
     ]
   }
