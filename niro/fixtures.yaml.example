@@ -19,7 +19,7 @@
 # fixtures.yaml announces known reference points into the running app's
 # seeded or otherwise known state. The app data itself lives in the
 # app's database, queues, object store, SaaS integrations, etc. This
-# file gives niro the concrete IDs, URLs, tenant names, provider keys,
+# file gives Niro the concrete IDs, URLs, tenant names, provider keys,
 # webhook examples, and other boot-time values it needs to test that
 # state precisely.
 #
@@ -40,7 +40,7 @@
 # How to produce niro/fixtures.yaml
 # ---------------------------------------------------------------------
 # Pick whichever pattern matches your boot flow. Niro re-reads the file
-# on each run that consumes the niro config, so you can regenerate it
+# on each run that consumes the Niro config, so you can regenerate it
 # after containers, databases, or third-party sandbox tenants are
 # recreated.
 #
@@ -58,7 +58,7 @@
 #   # Generated from a database/API lookup after the app boots
 #   ./scripts/render-niro-fixtures.sh > niro/fixtures.yaml
 #
-# Whatever you pick, the GENERATED file is what niro reads; the
+# Whatever you pick, the GENERATED file is what Niro reads; the
 # generator script is what you commit. Keep fixtures.yaml local-only.
 #
 # ---------------------------------------------------------------------
@@ -70,12 +70,12 @@
 #
 #   name         — non-empty unique lookup name.
 #   description  — non-empty human explanation of what this reference
-#                  point means and when niro should use it.
+#                  point means and when Niro should use it.
 #   value        — any YAML value. String, number, bool, list, map,
 #                  nested object, or null are all valid. Niro does not
 #                  inspect the shape.
 #
-# The `value` key must exist, but its contents are none of niro's
+# The `value` key must exist, but its contents are none of Niro's
 # business. `value: null` is legal and means the producer is announcing
 # a known fixture with no concrete value for this boot.
 #

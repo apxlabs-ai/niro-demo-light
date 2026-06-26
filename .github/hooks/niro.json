@@ -4,14 +4,14 @@
     "postToolUse": [
       {
         "type": "command",
-        "bash": "niro hook --event=post-tool-use --agent=copilot",
+        "command": "niro hook --event=post-tool-use --agent=copilot",
         "timeoutSec": 30
       }
     ],
     "agentStop": [
       {
         "type": "command",
-        "bash": "niro hook --event=agent-stop --agent=copilot",
+        "command": "niro hook --event=agent-stop --agent=copilot",
         "timeoutSec": 10
       }
     ]
